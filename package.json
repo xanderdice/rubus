@@ -1,0 +1,22 @@
+{
+  "name": "agentcoder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local agentic coding harness (Neutralino + Ollama) engineered to stay reliable on weak models.",
+  "scripts": {
+    "start": "node server.js",
+    "serve": "node server.js",
+    "setup": "neu update",
+    "dev": "neu run",
+    "build": "neu build --release",
+    "headless": "node public/js/cli/headless.js",
+    "selftest": "node public/js/test/selftest.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@neutralinojs/neu": "^11.7.2"
+  }
+}

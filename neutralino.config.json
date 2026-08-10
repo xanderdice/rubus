@@ -1,0 +1,57 @@
+{
+  "$schema": "https://raw.githubusercontent.com/neutralinojs/neutralinojs/main/schemas/neutralino.config.schema.json",
+  "applicationId": "dev.agentcoder.app",
+  "version": "0.1.0",
+  "defaultMode": "window",
+  "port": 0,
+  "documentRoot": "/public/",
+  "url": "/",
+  "enableServer": true,
+  "enableNativeAPI": true,
+  "tokenSecurity": "one-time",
+  "logging": {
+    "enabled": true,
+    "writeToLogFile": true
+  },
+  "nativeAllowList": [
+    "app.*",
+    "os.*",
+    "filesystem.*",
+    "storage.*",
+    "window.*",
+    "events.*",
+    "computer.*",
+    "clipboard.*",
+    "debug.*"
+  ],
+  "globalVariables": {
+    "APP_NAME": "AgentCoder"
+  },
+  "modes": {
+    "window": {
+      "title": "AgentCoder",
+      "width": 1500,
+      "height": 940,
+      "minWidth": 1040,
+      "minHeight": 620,
+      "center": true,
+      "fullScreen": false,
+      "alwaysOnTop": false,
+      "icon": "/public/icon.png",
+      "enableInspector": true,
+      "borderless": false,
+      "maximize": false,
+      "hidden": false,
+      "resizable": true,
+      "exitProcessOnClose": true
+    }
+  },
+  "cli": {
+    "binaryName": "agentcoder",
+    "resourcesPath": "/public/",
+    "extensionsPath": "/extensions/",
+    "clientLibrary": "/public/vendor/neutralino.js",
+    "binaryVersion": "5.5.0",
+    "clientVersion": "5.5.0"
+  }
+}

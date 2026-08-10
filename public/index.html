@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!--
+      First thing in the document on purpose. This is the virtual file the
+      Neutralino shell serves to define NL_PORT / NL_TOKEN; without it the page
+      cannot tell it is running natively and drops to the degraded browser
+      platform, where there is no filesystem and no shell.
+    -->
+    <script src="__neutralino_globals.js"></script>
+    <title>AgentCoder</title>
+    <!--
+      Locked down: the page may talk to itself, to the Neutralino loopback
+      WebSocket, and to a local Ollama daemon. Nothing else. There is
+      deliberately no CDN and no analytics host in this list — an agent with
+      filesystem access should not also have an outbound channel.
+
+      connect-src names both ws:// (Neutralino's native bridge, random port)
+      and http://127.0.0.1:* / http://localhost:* (Ollama's REST API, 11434 by
+      default but configurable in Ajustes).
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self';
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data:;
+        media-src 'self';
+        font-src 'self' data:;
+        connect-src 'self' ws://localhost:* ws://127.0.0.1:* http://localhost:* http://127.0.0.1:*;
+        frame-src 'none';
+        object-src 'none';
+        base-uri 'none';
+        form-action 'none'">
+    <meta name="referrer" content="no-referrer">
+    <link rel="icon" href="icon.png" type="image/png">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ═══════════════ ICON SPRITE ═══════════════ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+        <g id="i-folder"><path d="M1.5 13V3.5h4.2l1.6 2h7.2V13z"/></g>
+        <g id="i-file"><path d="M3 1.5h6l4 4v9H3z"/><path d="M9 1.5v4h4"/></g>
+        <g id="i-script"><path d="M3 1.5h6l4 4v9H3z"/><path d="M9 1.5v4h4M5.5 9l1.6 1.6-1.6 1.6M8.6 12.2h2.2"/></g>
+        <g id="i-search"><circle cx="7" cy="7" r="4.8"/><path d="M10.6 10.6 14.5 14.5"/></g>
+        <g id="i-gear"><circle cx="8" cy="8" r="2.4"/><path d="M8 .8v2.1M8 13.1v2.1M15.2 8h-2.1M2.9 8H.8M13.1 2.9l-1.5 1.5M4.4 11.6l-1.5 1.5M13.1 13.1l-1.5-1.5M4.4 4.4 2.9 2.9"/></g>
+        <g id="i-close"><path d="m3.5 3.5 9 9M12.5 3.5l-9 9"/></g>
+        <g id="i-plus"><path d="M8 2.5v11M2.5 8h11"/></g>
+        <g id="i-refresh"><path d="M14 8a6 6 0 1 1-1.8-4.3"/><path d="M14.4 1.6V5h-3.4"/></g>
+        <g id="i-trash"><path d="M2.5 4h11M6 4V2h4v2M4 4l.8 10.2h6.4L12 4"/></g>
+        <g id="i-play"><path d="M4 2.5 13 8l-9 5.5z"/></g>
+        <g id="i-step"><path d="M3 2.5 10 8l-7 5.5z"/><path d="M13 2.5v11"/></g>
+        <g id="i-pause"><path d="M5 3v10M11 3v10"/></g>
+        <g id="i-stop"><rect x="3.5" y="3.5" width="9" height="9"/></g>
+        <g id="i-check"><path d="m2.5 8.5 3.8 3.8L13.5 4"/></g>
+        <g id="i-warn"><path d="M8 1.8 15 14H1z"/><path d="M8 6.4v3.4M8 11.6v.1"/></g>
+        <g id="i-x-circle"><circle cx="8" cy="8" r="6.4"/><path d="m5.8 5.8 4.4 4.4M10.2 5.8l-4.4 4.4"/></g>
+        <g id="i-chev-r"><path d="m6 3.5 5 4.5-5 4.5"/></g>
+        <g id="i-chev-d"><path d="m3.5 6 4.5 5 4.5-5"/></g>
+        <g id="i-pin"><path d="M9.6 1.6 14.4 6.4l-2.6.9-3.6 3.6-.6 3.5-4-4-4 1.2 1.2-4-4-4 3.5-.6L4 2.9z"/></g>
+        <g id="i-terminal"><rect x="1.5" y="2.5" width="13" height="11"/><path d="m4.2 6 2.4 2.2-2.4 2.2M8.4 10.8h3.4"/></g>
+        <g id="i-diff"><path d="M4 1.8v8.4M1.8 4h4.4M9.8 12h4.4"/><path d="M4 13.2a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM12 5.8a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/></g>
+        <g id="i-list"><path d="M2 3.5h12M2 8h12M2 12.5h8"/></g>
+        <g id="i-map"><path d="M1.5 3.8 6 2l4 1.8L14.5 2v10.2L10 14l-4-1.8L1.5 14z"/><path d="M6 2v10.2M10 3.8V14"/></g>
+        <g id="i-brain"><path d="M6.4 2.6a2.4 2.4 0 0 0-2.3 3 2.2 2.2 0 0 0-.6 3.8 2.3 2.3 0 0 0 1.8 3.4 2.2 2.2 0 0 0 4.3-.6V4.9a2.3 2.3 0 0 0-3.2-2.3z"/><path d="M11.2 5.2a2 2 0 1 1 2.4 3 2 2 0 0 1-1.2 3.6"/></g>
+        <g id="i-cpu"><rect x="4.5" y="4.5" width="7" height="7"/><path d="M6.5 1.5v3M9.5 1.5v3M6.5 11.5v3M9.5 11.5v3M1.5 6.5h3M1.5 9.5h3M11.5 6.5h3M11.5 9.5h3"/></g>
+        <g id="i-send"><path d="M1.8 8 14.5 2.2 9.4 14.2 7.6 9.1z"/><path d="m7.6 9.1 6.9-6.9"/></g>
+        <g id="i-updir"><path d="M1.5 13V3.5h4.2l1.6 2h7.2V13z"/><path d="M8 11.8V7.3M6.1 9.2 8 7.3l1.9 1.9"/></g>
+        <g id="i-edit"><path d="M11.4 2.3 13.7 4.6 5.6 12.7l-3 .7.7-3z"/><path d="m10 3.7 2.3 2.3"/></g>
+    </defs>
+</svg>
+
+<div class="bloom-layer bloom-layer--core" aria-hidden="true"></div>
+<div class="bloom-layer bloom-layer--halo" aria-hidden="true"></div>
+<div class="bloom-ambient" aria-hidden="true"></div>
+
+<div id="app">
+
+    <!-- ═══════════════ MENU BAR ═══════════════ -->
+    <header id="menubar">
+        <div class="brand"><b>AGENT</b>CODER</div>
+
+        <!--
+          The mode switch is not decorative. Plan mode hard-disables every
+          mutating tool in the registry, so this control is the visible face of
+          a real capability boundary.
+        -->
+        <div class="mode-switch" id="mode-switch" role="tablist" aria-label="Modo">
+            <button class="mode active" data-mode="plan" role="tab" aria-selected="true">
+                <svg class="ico"><use href="#i-map"/></svg>Plan
+                <em>sólo lectura</em>
+            </button>
+            <button class="mode" data-mode="act" role="tab" aria-selected="false">
+                <svg class="ico"><use href="#i-edit"/></svg>Act
+                <em>edita archivos</em>
+            </button>
+        </div>
+
+        <span class="tool-spacer"></span>
+
+        <button class="chip" id="chip-root" title="Carpeta de trabajo" aria-label="Carpeta de trabajo">
+            <svg class="ico"><use href="#i-folder"/></svg><span>sin carpeta</span>
+        </button>
+        <button class="chip" id="chip-model" title="Modelo de Ollama" aria-label="Modelo de Ollama">
+            <svg class="ico"><use href="#i-cpu"/></svg><span>sin modelo</span>
+        </button>
+        <span class="chip chip--static" id="chip-context" title="Contexto usado / presupuesto">
+            <svg class="ico"><use href="#i-brain"/></svg><span>0 / 0</span>
+        </span>
+        <span class="chip chip--static chip--dot" id="chip-ollama" title="Estado de Ollama">
+            <i class="dot"></i><span>comprobando…</span>
+        </span>
+        <button class="ibtn" id="btn-settings" title="Ajustes" aria-label="Ajustes"><svg class="ico"><use href="#i-gear"/></svg></button>
+    </header>
+
+    <!-- ═══════════════ WORKSPACE ═══════════════ -->
+    <div id="workspace">
+
+        <!-- ── EXPLORER ── -->
+        <section class="panel" id="explorer-panel">
+            <div class="panel-head">
+                <span class="panel-title">Proyecto</span>
+                <span class="tab-count" id="explorer-count">0</span>
+                <button class="ibtn" id="btn-explorer-refresh" title="Reescanear" aria-label="Reescanear"><svg class="ico"><use href="#i-refresh"/></svg></button>
+            </div>
+            <div class="panel-search">
+                <svg class="ico"><use href="#i-search"/></svg>
+                <input type="text" id="explorer-filter" placeholder="filtrar archivos…" aria-label="filtrar archivos…" spellcheck="false" autocomplete="off">
+            </div>
+
+            <!-- Pinned files are always in the prompt, so they get their own
+                 always-visible section rather than a badge in the tree. -->
+            <div class="pins" id="pins-section" hidden>
+                <div class="pins-head"><svg class="ico"><use href="#i-pin"/></svg>Fijados en el contexto</div>
+                <div class="pins-list" id="pins-list"></div>
+            </div>
+
+            <div class="panel-body" id="explorer-body">
+                <div class="empty-msg">Sin carpeta de trabajo.</div>
+            </div>
+            <div class="panel-foot">
+                <button class="btn btn--sm" id="btn-pick-root"><svg class="ico"><use href="#i-folder"/></svg>Elegir carpeta…</button>
+            </div>
+            <i class="bracket bracket--tl"></i><i class="bracket bracket--br"></i>
+        </section>
+
+        <!-- ── CENTER: CHAT ── -->
+        <div id="center">
+            <section id="chat-panel">
+                <div class="chat-scroll" id="chat-scroll">
+                    <div class="chat-welcome" id="chat-welcome">
+                        <svg class="ico ico--xl"><use href="#i-brain"/></svg>
+                        <h1>AgentCoder</h1>
+                        <p>Agente de programación local. Explora, propone un plan, tú lo apruebas, y sólo entonces toca archivos.</p>
+                        <ol class="welcome-steps">
+                            <li><b>1.</b> Elige la carpeta del proyecto</li>
+                            <li><b>2.</b> Elige el modelo de Ollama</li>
+                            <li><b>3.</b> Describe la tarea abajo</li>
+                        </ol>
+                        <div class="welcome-warn" id="welcome-warn" hidden></div>
+                    </div>
+                    <div id="chat-messages"></div>
+                </div>
+
+                <!--
+                  Live activity. The single most common complaint about a local
+                  agent is not knowing whether it is working or hung: a 36B model
+                  can spend 90 seconds on one turn with nothing to show. This bar
+                  is always truthful about the current phase, the step, the turn
+                  and how long it has been going.
+                -->
+                <!--
+                  One row per operation actually in flight, above the summary
+                  bar: which file is being read, how far the search has got,
+                  and above all how long the model has been thinking before its
+                  first token. That last one is the longest silence in the
+                  system and the reason people conclude the app is hung.
+                -->
+                <div id="progress" class="progress-strip" hidden></div>
+
+                <div id="activity" class="activity" hidden>
+                    <i class="activity-spin"></i>
+                    <span class="activity-phase" id="activity-phase">trabajando</span>
+                    <span class="activity-detail" id="activity-detail"></span>
+                    <span class="tool-spacer"></span>
+                    <span class="activity-meta" id="activity-meta"></span>
+                    <span class="activity-clock" id="activity-clock">0s</span>
+                </div>
+
+                <div id="composer">
+                    <div class="composer-row">
+                        <textarea id="composer-input" rows="3" spellcheck="false"
+                                  placeholder="Describe la tarea. Sé concreto: qué archivo, qué comportamiento, cómo se comprueba que está bien.  ·  Ctrl+Enter para enviar"></textarea>
+                        <button class="btn btn--primary btn--send" id="btn-send" title="Enviar (Ctrl+Enter)" aria-label="Enviar (Ctrl+Enter)">
+                            <svg class="ico"><use href="#i-send"/></svg>
+                        </button>
+                    </div>
+                    <!--
+                      Run controls live under the composer rather than in the
+                      plan panel: they are the same five buttons whatever tab is
+                      open, and hiding them behind a tab makes Cancelar hard to
+                      find at the exact moment it is needed.
+                    -->
+                    <div class="composer-controls" id="run-controls">
+                        <button class="btn btn--go" id="btn-approve" disabled><svg class="ico"><use href="#i-check"/></svg>Aprobar plan</button>
+                        <button class="btn" id="btn-step" disabled><svg class="ico"><use href="#i-step"/></svg>Ejecutar paso</button>
+                        <button class="btn" id="btn-run-all" disabled><svg class="ico"><use href="#i-play"/></svg>Ejecutar todo</button>
+                        <button class="btn" id="btn-replan" disabled><svg class="ico"><use href="#i-refresh"/></svg>Replanificar</button>
+                        <span class="tool-spacer"></span>
+                        <button class="btn" id="btn-pause" disabled><svg class="ico"><use href="#i-pause"/></svg>Pausar</button>
+                        <button class="btn btn--danger" id="btn-cancel" disabled><svg class="ico"><use href="#i-stop"/></svg>Cancelar</button>
+                    </div>
+                    <!-- Why the buttons are as they are. A disabled control with
+                         no explanation reads as a broken app. -->
+                    <div class="run-hint" id="run-hint" hidden></div>
+                </div>
+            </section>
+        </div>
+
+        <!-- ── SIDE PANEL ── -->
+        <section class="panel" id="side-panel">
+            <div class="panel-head">
+                <div class="panel-tabs" id="side-tabs">
+                    <span class="panel-tab active" data-tab="plan"><svg class="ico"><use href="#i-list"/></svg>Plan <span class="tab-count" id="plan-count">0</span></span>
+                    <span class="panel-tab" data-tab="timeline"><svg class="ico"><use href="#i-map"/></svg>Acciones <span class="tab-count" id="timeline-count">0</span></span>
+                    <span class="panel-tab" data-tab="diffs"><svg class="ico"><use href="#i-diff"/></svg>Cambios <span class="tab-count" id="diff-count">0</span></span>
+                    <span class="panel-tab" data-tab="terminal"><svg class="ico"><use href="#i-terminal"/></svg>Terminal</span>
+                    <span class="panel-tab" data-tab="logs"><svg class="ico"><use href="#i-script"/></svg>Log</span>
+                </div>
+            </div>
+
+            <div class="panel-body side-body" id="side-plan">
+                <div class="empty-msg">Todavía no hay plan. Describe una tarea y el agente propondrá uno.</div>
+            </div>
+            <div class="panel-body side-body" id="side-timeline" hidden></div>
+            <div class="panel-body side-body" id="side-diffs" hidden>
+                <div class="empty-msg">Ningún archivo modificado.</div>
+            </div>
+            <div class="panel-body side-body side-body--mono" id="side-terminal" hidden></div>
+            <div class="panel-body side-body side-body--mono" id="side-logs" hidden></div>
+
+            <i class="bracket bracket--tl"></i><i class="bracket bracket--br"></i>
+        </section>
+    </div>
+
+    <!-- ═══════════════ STATUS ═══════════════ -->
+    <footer id="statusbar">
+        <span class="state-pill" id="status-state">inactivo</span>
+        <span class="dot"></span>
+        <span id="status-step">sin plan</span>
+        <span class="dot"></span>
+        <span id="status-message">listo</span>
+        <span class="status-spacer"></span>
+        <span id="status-changes">0 archivos modificados</span>
+    </footer>
+</div>
+
+<!-- ═══════════════ APPROVAL ═══════════════
+     Modal on purpose: this is the last gate before something irreversible
+     happens, and a toast is too easy to miss or dismiss by accident. -->
+<div class="backdrop" id="approval-dialog" hidden>
+    <div class="dialog dialog--narrow">
+        <div class="dialog-head">
+            <svg class="ico" id="approval-icon"><use href="#i-warn"/></svg>
+            <span id="approval-title">Confirmar</span>
+        </div>
+        <div class="dialog-body">
+            <p class="approval-detail" id="approval-detail"></p>
+            <pre class="approval-command" id="approval-command"></pre>
+            <p class="approval-risk" id="approval-risk"></p>
+        </div>
+        <div class="dialog-foot">
+            <span class="tool-spacer"></span>
+            <button class="btn" id="approval-deny">Rechazar</button>
+            <button class="btn btn--danger" id="approval-allow">Ejecutar</button>
+        </div>
+        <i class="bracket bracket--tl"></i><i class="bracket bracket--tr"></i>
+        <i class="bracket bracket--bl"></i><i class="bracket bracket--br"></i>
+    </div>
+</div>
+
+<!-- ═══════════════ DIFF VIEWER ═══════════════ -->
+<div class="backdrop" id="diff-dialog" hidden>
+    <div class="dialog dialog--wide">
+        <div class="dialog-head">
+            <svg class="ico"><use href="#i-diff"/></svg>
+            <span id="diff-title">Cambios</span>
+            <span class="diff-stats" id="diff-stats"></span>
+            <button class="ibtn" data-close="diff-dialog"><svg class="ico"><use href="#i-close"/></svg></button>
+        </div>
+        <div class="dialog-body diff-body" id="diff-body"></div>
+        <i class="bracket bracket--tl"></i><i class="bracket bracket--tr"></i>
+        <i class="bracket bracket--bl"></i><i class="bracket bracket--br"></i>
+    </div>
+</div>
+
+<!-- ═══════════════ SETTINGS ═══════════════ -->
+<div class="backdrop" id="settings-dialog" hidden>
+    <div class="dialog dialog--wide">
+        <div class="dialog-head">
+            <svg class="ico"><use href="#i-gear"/></svg>
+            <span>Ajustes</span>
+            <button class="ibtn" data-close="settings-dialog"><svg class="ico"><use href="#i-close"/></svg></button>
+        </div>
+        <div class="prefs">
+            <aside class="prefs-nav" id="prefs-nav"></aside>
+            <div class="prefs-body" id="prefs-body"></div>
+        </div>
+        <div class="dialog-foot">
+            <button class="btn" id="prefs-reset">Restaurar por defecto</button>
+            <span class="tool-spacer"></span>
+            <span class="dim">se guarda automáticamente</span>
+            <button class="btn btn--primary" data-close="settings-dialog">Cerrar</button>
+        </div>
+        <i class="bracket bracket--tl"></i><i class="bracket bracket--tr"></i>
+        <i class="bracket bracket--bl"></i><i class="bracket bracket--br"></i>
+    </div>
+</div>
+
+<!-- ═══════════════ FOLDER PICKER ═══════════════
+     A browser of our own, because the native dialog is unavailable outside the
+     Neutralino shell and unusable over a remote session. -->
+<div class="backdrop" id="folder-dialog" hidden>
+    <div class="dialog">
+        <div class="dialog-head">
+            <svg class="ico"><use href="#i-folder"/></svg>
+            <span>Carpeta de trabajo</span>
+            <button class="ibtn" data-close="folder-dialog"><svg class="ico"><use href="#i-close"/></svg></button>
+        </div>
+        <div class="folder-bar">
+            <button class="ibtn" id="folder-up" title="Subir" aria-label="Subir"><svg class="ico"><use href="#i-updir"/></svg></button>
+            <input type="text" id="folder-path" spellcheck="false" placeholder="C:/ruta/al/proyecto" aria-label="C:/ruta/al/proyecto">
+            <button class="ibtn" id="folder-go" title="Ir" aria-label="Ir"><svg class="ico"><use href="#i-chev-r"/></svg></button>
+        </div>
+        <div class="folder-recent" id="folder-recent"></div>
+        <div class="dialog-body"><div class="list" id="folder-list"></div></div>
+        <div class="dialog-foot">
+            <button class="btn" id="folder-native"><svg class="ico"><use href="#i-folder"/></svg>Diálogo del sistema</button>
+            <span class="folder-status" id="folder-status"></span>
+            <span class="tool-spacer"></span>
+            <button class="btn" data-close="folder-dialog">Cancelar</button>
+            <button class="btn btn--primary" id="folder-confirm">Usar esta carpeta</button>
+        </div>
+        <i class="bracket bracket--tl"></i><i class="bracket bracket--tr"></i>
+        <i class="bracket bracket--bl"></i><i class="bracket bracket--br"></i>
+    </div>
+</div>
+
+<!-- ═══════════════ MODEL PICKER ═══════════════ -->
+<div class="backdrop" id="model-dialog" hidden>
+    <div class="dialog dialog--narrow">
+        <div class="dialog-head">
+            <svg class="ico"><use href="#i-cpu"/></svg>
+            <span>Modelo</span>
+            <button class="ibtn" data-close="model-dialog"><svg class="ico"><use href="#i-close"/></svg></button>
+        </div>
+        <div class="dialog-body">
+            <div class="list" id="model-list"></div>
+
+            <!--
+              Reasoning effort, next to the model because it is a property of
+              how you want to use that model, not a buried preference.
+            -->
+            <div class="think-picker" id="think-picker">
+                <div class="think-head">
+                    <svg class="ico ico--sm"><use href="#i-brain"/></svg>
+                    <span>Nivel de pensamiento</span>
+                    <span class="think-note" id="think-note"></span>
+                </div>
+                <div class="think-levels" id="think-levels">
+                    <button class="think-lvl" data-level="off"    title="Sin razonamiento. Lo más rápido." aria-label="Sin razonamiento. Lo más rápido.">apagado</button>
+                    <button class="think-lvl" data-level="low"    title="Razonamiento breve." aria-label="Razonamiento breve.">bajo</button>
+                    <button class="think-lvl" data-level="medium" title="Razonamiento medio." aria-label="Razonamiento medio.">medio</button>
+                    <button class="think-lvl" data-level="high"   title="Razonamiento extenso. Lo más lento." aria-label="Razonamiento extenso. Lo más lento.">alto</button>
+                    <button class="think-lvl" data-level="on"     title="Activado, sin pedir nivel. Compatible con cualquier modelo que piense." aria-label="Activado, sin pedir nivel. Compatible con cualquier modelo que piense.">activado</button>
+                </div>
+            </div>
+        </div>
+        <div class="dialog-foot">
+            <button class="btn" id="model-refresh"><svg class="ico"><use href="#i-refresh"/></svg>Recargar</button>
+            <span class="tool-spacer"></span>
+            <button class="btn" data-close="model-dialog">Cerrar</button>
+        </div>
+        <i class="bracket bracket--tl"></i><i class="bracket bracket--tr"></i>
+        <i class="bracket bracket--bl"></i><i class="bracket bracket--br"></i>
+    </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<!--
+  The Neutralino client library, dropped here by `neu update`. It is what
+  defines window.Neutralino; without it the page has no native API and the
+  platform detector falls back to degraded browser mode. Absent in a plain
+  browser, where the 404 is harmless and expected.
+-->
+<script src="vendor/neutralino.js"></script>
+
+<!--
+  Boot loader: detects the platform, brings up the engine, then mounts the UI.
+  Not a module tag — it dynamic-imports the app so a load failure can be shown
+  as a real message instead of a blank window and a console nobody will open.
+-->
+<script src="js/boot.js"></script>
+</body>
+</html>

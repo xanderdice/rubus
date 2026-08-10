@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentCoder — componente embebido</title>
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'self';
+        script-src 'self';
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data:;
+        connect-src 'self' ws://localhost:* ws://127.0.0.1:* http://localhost:* http://127.0.0.1:*;
+        object-src 'none'; base-uri 'none'; form-action 'none'">
+    <style>
+        /* Estilos DE ESTA PÁGINA. El componente trae los suyos: no hace falta
+           cargar el CSS de AgentCoder para embeberlo. */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            height: 100vh; display: flex; flex-direction: column;
+            background: #04070a; color: #8fa6b1;
+            font: 13px/1.6 ui-monospace, Consolas, monospace;
+        }
+        header { padding: 10px 14px; border-bottom: 1px solid rgba(143,216,232,.18); }
+        h1 { font-size: 13px; font-weight: 500; letter-spacing: .18em; color: #eafaff; }
+        h1 small { display: block; margin-top: 3px; font-size: 10px; letter-spacing: 0; color: #5d717c; }
+        .cfg { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-bottom: 1px solid rgba(143,216,232,.18); }
+        .cfg input, .cfg select, .cfg button {
+            background: rgba(0,0,0,.3); border: 1px solid rgba(143,216,232,.18);
+            color: #8fa6b1; font: inherit; font-size: 12px; padding: 4px 8px;
+        }
+        .cfg input { min-width: 190px; }
+        .cfg input.task { flex: 1; min-width: 280px; }
+        .cfg button { cursor: pointer; color: #eafaff; border-color: rgba(143,216,232,.5); }
+        .cfg button:disabled { opacity: .4; cursor: not-allowed; }
+        /* El div de salida. Sólo necesita un tamaño; el resto lo pone el componente. */
+        #salida { flex: 1; min-height: 0; border-top: 1px solid rgba(143,216,232,.18); }
+        .err { padding: 10px 14px; color: #ff786e; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>AGENTCODER · EMBEBIDO
+        <small>El mismo motor dentro de un &lt;div&gt; ajeno. Mira el código de esta página: son 30 líneas.</small>
+    </h1>
+</header>
+
+<div class="cfg">
+    <input id="ollama" value="http://127.0.0.1:11434" title="URL de Ollama">
+    <select id="model"><option>cargando modelos…</option></select>
+    <input id="workspace" placeholder="C:/ruta/al/proyecto" title="Carpeta de trabajo">
+    <input id="verify" placeholder="comando de verificación (npm test)" title="Se ejecuta al terminar cada paso">
+    <input id="task" class="task" placeholder="Qué quieres que haga…">
+    <button id="go">Ejecutar</button>
+    <button id="stop" disabled>Cancelar</button>
+</div>
+
+<!-- AQUÍ escribe el agente todo lo que va haciendo. -->
+<div id="salida"></div>
+
+<div class="err" id="err" hidden></div>
+
+<script type="module">
+    import { createAgent } from './js/embed/agent.js';
+
+    const $ = (id) => document.getElementById(id);
+    let agent = null;
+
+    // Rellenar el desplegable de modelos preguntándole a un agente sin tarea.
+    try {
+        const probe = await createAgent({ ollamaUrl: $('ollama').value });
+        const models = await probe.listModels();
+        $('model').innerHTML = '';
+        for (const m of models) {
+            const opt = document.createElement('option');
+            opt.value = opt.textContent = m.name;
+            $('model').appendChild(opt);
+        }
+        if (!models.length) $('model').innerHTML = '<option>sin modelos — ollama pull qwen3.6</option>';
+        await probe.destroy();
+    } catch (err) {
+        $('model').innerHTML = '<option>Ollama no responde</option>';
+        $('err').hidden = false;
+        $('err').textContent = err.message;
+    }
+
+    $('go').addEventListener('click', async () => {
+        $('err').hidden = true;
+        $('go').disabled = true;
+        $('stop').disabled = false;
+
+        try {
+            if (agent) await agent.destroy();
+
+            // ── ESTO ES TODO LO QUE HACE FALTA ─────────────────────────────
+            agent = await createAgent({
+                ollamaUrl: $('ollama').value,
+                model: $('model').value,
+                workspace: $('workspace').value,
+                verifyCommand: $('verify').value,
+                output: $('salida')
+            });
+
+            await agent.run($('task').value);
+            // ───────────────────────────────────────────────────────────────
+        } catch (err) {
+            $('err').hidden = false;
+            $('err').textContent = err.message;
+        } finally {
+            $('go').disabled = false;
+            $('stop').disabled = true;
+        }
+    });
+
+    $('stop').addEventListener('click', async () => {
+        if (agent) await agent.cancel();
+        $('stop').disabled = true;
+        $('go').disabled = false;
+    });
+</script>
+</body>
+</html>

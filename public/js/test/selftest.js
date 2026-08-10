@@ -127,6 +127,24 @@ section('security');
     eq('unknown command is not safe', sec.classifyCommand('weirdtool --go').risk, RISK.CAUTION);
 
     eq('splitChain respects quotes', splitChain('echo "a && b" && ls').length, 2);
+
+    // A single `&` chains commands in cmd.exe and backgrounds them in sh.
+    // Missing it meant the whole string was graded as its first link, so
+    // anything hidden behind the `&` inherited that link's grade — and SAFE
+    // runs with no dialog at all.
+    eq('un & simple separa enlaces', splitChain('ls & node x').length, 2);
+    ok('nada se cuela detrás de un &', sec.classifyCommand('ls & node borrar-todo.js').risk !== RISK.SAFE,
+        sec.classifyCommand('ls & node borrar-todo.js').risk);
+    eq('& toma el peor grado', sec.classifyCommand('git status & rm -rf build').risk, RISK.DANGEROUS);
+    ok('dos comandos de lectura siguen siendo seguros', sec.classifyCommand('dir & type a.txt').risk === RISK.SAFE);
+
+    // Redirection: a dialog raised for `2>&1` is a dialog the user learns to
+    // dismiss without reading, which costs more than it protects.
+    eq('2>&1 no es una redirección a archivo', sec.classifyCommand('npm test 2>&1').risk, RISK.CAUTION);
+    eq('2>&1 sobrevive entero al troceado', splitChain('npm test 2>&1').length, 1);
+    eq('un > entrecomillado no cuenta', sec.classifyCommand('git commit -m "arreglo a > b"').risk, RISK.CAUTION);
+    eq('redirigir a un archivo sí es peligroso', sec.classifyCommand('echo x > salida.txt').risk, RISK.DANGEROUS);
+    eq('anexar a un archivo también', sec.classifyCommand('echo x >> salida.txt').risk, RISK.DANGEROUS);
 }
 
 // ── tool-call parsing ─────────────────────────────────────────────────────
@@ -440,6 +458,30 @@ section('context');
     eq('ephemeral pair dropped together', ctx.history.length, 1);
     ok('no orphan tool message survives', !ctx.history.some(m => m.role === 'tool'));
 
+    // The pairing rule again, broken from the other end: the budget cut lands
+    // between an assistant `tool_calls` turn and its result, and the result is
+    // the newer of the two, so it is the one that survives — alone.
+    ctx.reset();
+    ctx.addUser('tarea');
+    for (let i = 0; i < 4; i++) {
+        ctx.add('assistant', 'Voy a mirarlo. '.repeat(40), { toolCalls: [{ function: { name: 'read_file', arguments: { path: `a${i}.js` } } }] });
+        ctx.addToolResult('read_file', 'X'.repeat(1200));
+    }
+    let orphans = 0;
+    for (let budget = 300; budget <= 3000; budget += 50) {
+        const sel = ctx.selectHistory(budget, { nativeTools: true });
+        if (sel.messages.length && sel.messages[0].role === 'tool') orphans++;
+    }
+    eq('ningún presupuesto deja un tool huérfano', orphans, 0);
+
+    // The drop is for the native path only. Without a tool role the result is
+    // already a labelled user turn that stands on its own, so discarding it
+    // there would throw away the observation for nothing.
+    const plano = ctx.selectHistory(1100, { nativeTools: false });
+    ok('sin tools nativas no se emite el rol tool', !plano.messages.some(m => m.role === 'tool'));
+    ok('sin tools nativas el resultado se conserva',
+        plano.messages.some(m => m.content.startsWith('RESULTADO DE read_file')));
+
     // Newest-first fill, chronological output.
     ctx.reset();
     for (let i = 0; i < 20; i++) ctx.addUser(`mensaje ${i} ${'x'.repeat(400)}`);
@@ -552,10 +594,10 @@ section('server');
 
     const PORT = 4399;
     const TOKEN = 'prueba-token-123';
-    const root = nodePath.join(os.tmpdir(), `agentcoder-test-${Date.now()}`);
+    const root = nodePath.join(os.tmpdir(), `rubus-test-${Date.now()}`);
     await nodefs.mkdir(nodePath.join(root, 'sub'), { recursive: true });
     await nodefs.writeFile(nodePath.join(root, 'dentro.txt'), 'contenido de prueba', 'utf8');
-    await nodefs.writeFile(nodePath.join(os.tmpdir(), 'agentcoder-fuera.txt'), 'NO deberías leer esto', 'utf8');
+    await nodefs.writeFile(nodePath.join(os.tmpdir(), 'rubus-fuera.txt'), 'NO deberías leer esto', 'utf8');
 
     // Remote mode: --root is a hard boundary and the token is enforced.
     const child = spawn(process.execPath, [
@@ -580,6 +622,9 @@ section('server');
         ok('el servidor arranca', false, `no respondió en ${base}`);
     } else {
         const ping = await (await fetch(`${base}/api/ping`)).json();
+        // Deliberately still the old name: this is the handshake `http.js`
+        // checks to decide whether a backend exists, not a display string.
+        // Changing it is a protocol change on both sides — see AGENTS.md.
         eq('ping se identifica', ping.name, 'agentcoder');
         eq('modo remoto detectado', ping.mode, 'remote');
         eq('anuncia que pide token', ping.needsToken, true);
@@ -593,12 +638,12 @@ section('server');
         eq('lee dentro de la raíz', (await (await post('fs/read', { path: 'dentro.txt' })).json()).content, 'contenido de prueba');
 
         // The boundary. These are the tests that matter.
-        eq('escapar con .. -> 403', (await post('fs/read', { path: '../agentcoder-fuera.txt' })).status, 403);
+        eq('escapar con .. -> 403', (await post('fs/read', { path: '../rubus-fuera.txt' })).status, 403);
         eq('ruta absoluta fuera -> 403', (await post('fs/read', { path: 'C:/Windows/win.ini' })).status, 403);
         eq('escritura fuera -> 403', (await post('fs/write', { path: '../pwned.txt', content: 'x' })).status, 403);
         eq('listar fuera -> 403', (await post('fs/list', { path: '../..' })).status, 403);
         ok('el archivo de fuera sigue intacto',
-            (await nodefs.readFile(nodePath.join(os.tmpdir(), 'agentcoder-fuera.txt'), 'utf8')) === 'NO deberías leer esto');
+            (await nodefs.readFile(nodePath.join(os.tmpdir(), 'rubus-fuera.txt'), 'utf8')) === 'NO deberías leer esto');
 
         // Round trip inside the boundary
         await post('fs/write', { path: 'sub/nuevo.txt', content: 'hola' });
@@ -610,6 +655,30 @@ section('server');
         eq('sirve index.html', (await fetch(`${base}/`)).status, 200);
         eq('sirve módulos ESM', (await fetch(`${base}/js/core/engine.js`)).status, 200);
         eq('traversal en estáticos -> 404', (await fetch(`${base}/../package.json`)).status, 404);
+
+        // The escape a `startsWith(PUBLIC)` guard cannot see.
+        //
+        // `new URL` normalises `..` and `%2e%2e` away before the handler ever
+        // runs, so the dot segments alone go nowhere. `%2f` is NOT normalised:
+        // smuggle the separator and the dots ride along in the clear. That
+        // lands on a SIBLING of public/ — and "…/public-fuga" does start with
+        // "…/public", so the prefix check waves it through. Only a real
+        // containment test (path.relative) refuses it.
+        //
+        // The decoy directory is created here rather than assumed: the hole is
+        // invisible without a sibling to reach, which is exactly why it can sit
+        // in a codebase for a long time.
+        const fuga = nodePath.join(REPO_ROOT, 'public-fuga-selftest');
+        await nodefs.mkdir(fuga, { recursive: true });
+        await nodefs.writeFile(nodePath.join(fuga, 'clave.txt'), 'SECRETO-QUE-NO-SE-SIRVE', 'utf8');
+        try {
+            const escapado = await fetch(`${base}/x%2f%2e%2e%2f%2e%2e%2fpublic-fuga-selftest/clave.txt`);
+            ok('traversal con %2f no alcanza un hermano de public/', escapado.status === 403, `HTTP ${escapado.status}`);
+            ok('el secreto del hermano no se sirve', !(await escapado.text()).includes('SECRETO-QUE-NO-SE-SIRVE'));
+        } finally {
+            await nodefs.rm(fuga, { recursive: true, force: true }).catch(() => {});
+        }
+
         eq('ruta de API desconocida -> 404', (await post('nope', {})).status, 404);
 
         // Exec streams NDJSON and reports the exit code
@@ -618,6 +687,87 @@ section('server');
         const lines = (await execRes.text()).trim().split('\n').map(l => JSON.parse(l));
         ok('exec transmite stdout', lines.some(l => l.stream === 'stdout' && /v\d+/.test(l.text)));
         ok('exec termina con exitCode 0', lines.some(l => l.done && l.exitCode === 0));
+
+        // ── cancelar de verdad mata el comando ────────────────────────────
+        // Two bugs shared these lines and each hid the other: the disconnect
+        // listener sat on `req`, where it never fires, and the kill went to the
+        // shell rather than to the command, which on Windows leaves the real
+        // process orphaned. Either one alone means Cancel does not cancel.
+        //
+        // Proved through the filesystem, not the process table: a heartbeat
+        // that keeps writing after the kill is the same claim, and it needs no
+        // pid and no platform-specific way to look one up. Timestamps rather
+        // than a byte count, because "the file stopped growing" is also what a
+        // command that finished on its own looks like.
+        //
+        // The heartbeat prints to stdout as well as to disk, and that is
+        // load-bearing: `writeHead` alone does not reach the socket, so without
+        // output the client would not receive the response — and could not
+        // abort it — until the command had already ended. That is what made an
+        // earlier version of this test pass against the broken server.
+        //
+        // It also gives up on its own after 20s, so a regression cannot leave a
+        // stray process running for the rest of the suite.
+        await nodefs.writeFile(nodePath.join(root, 'latido.js'), [
+            "const fs = require('fs');",
+            "const t = setInterval(() => { fs.appendFileSync('latido.txt', Date.now() + '\\n'); process.stdout.write('.'); }, 100);",
+            'setTimeout(() => { clearInterval(t); process.exit(0); }, 20000);'
+        ].join('\n'), 'utf8');
+
+        /** When did the command last prove it was alive? */
+        const ultimoLatido = async () => {
+            try {
+                const l = (await nodefs.readFile(nodePath.join(root, 'latido.txt'), 'utf8')).trim().split('\n');
+                return Number(l[l.length - 1]) || 0;
+            } catch { return 0; }
+        };
+
+        const abortar = new AbortController();
+        const vivo = await fetch(`${base}/api/exec`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
+            body: JSON.stringify({ command: 'node latido.js', timeoutMs: 60000 }),
+            signal: abortar.signal
+        });
+        eq('exec largo responde 200', vivo.status, 200);
+
+        // Waiting for a chunk, not for a clock: this is also the assertion that
+        // the headers were flushed before the command produced anything.
+        await vivo.body.getReader().read();
+        await new Promise(r => setTimeout(r, 400));
+        ok('el comando estaba vivo antes de cancelar', (await ultimoLatido()) > 0);
+
+        const alAbortar = Date.now();
+        abortar.abort();
+        await new Promise(r => setTimeout(r, 1500));
+        const despues = await ultimoLatido();
+        ok('el comando muere cuando el cliente se va', despues <= alAbortar + 400,
+            `siguió latiendo ${despues - alAbortar}ms después de abortar`);
+
+        // Same kill, other trigger: a timeout that does not stop the process is
+        // a label, not a limit.
+        await nodefs.rm(nodePath.join(root, 'latido.txt'), { force: true }).catch(() => {});
+        const inicioTimeout = Date.now();
+        const conTimeout = await post('exec', { command: 'node latido.js', timeoutMs: 1200 });
+        // The clock starts when the SERVER closes the stream, which it does
+        // after the kill — not when the headers arrive, which is now immediate.
+        const cuerpoTimeout = await conTimeout.text();
+        const finTimeout = Date.now();
+        const cerrado = cuerpoTimeout.trim().split('\n').map(l => JSON.parse(l)).find(l => l.done);
+        ok('el timeout se reporta', cerrado && cerrado.timedOut === true, JSON.stringify(cerrado));
+
+        // The response has to close when the timeout fires, not when the
+        // command eventually gives up. Kill only the shell and the orphan keeps
+        // the stdout pipe open, so 'close' never arrives and the caller waits
+        // out the full command — a 1.2s timeout that returns twenty seconds
+        // later, which is the same as no timeout at all.
+        ok('el timeout cierra la respuesta a tiempo', finTimeout - inicioTimeout < 6000,
+            `la respuesta tardó ${finTimeout - inicioTimeout}ms para un timeout de 1200ms`);
+
+        await new Promise(r => setTimeout(r, 1500));
+        const trasTimeout = await ultimoLatido();
+        ok('el timeout mata el comando de verdad', trasTimeout <= finTimeout + 400,
+            `siguió latiendo ${trasTimeout - finTimeout}ms tras el timeout`);
 
         // ── proxy: la petición debe llegar a Ollama ──────────────────────
         // Asserts the proxy reaches upstream and returns a verdict, whether or
@@ -686,7 +836,7 @@ section('server');
 
     child.kill();
     await nodefs.rm(root, { recursive: true, force: true }).catch(() => {});
-    await nodefs.rm(nodePath.join(os.tmpdir(), 'agentcoder-fuera.txt'), { force: true }).catch(() => {});
+    await nodefs.rm(nodePath.join(os.tmpdir(), 'rubus-fuera.txt'), { force: true }).catch(() => {});
 }
 
 // ── navigating a big project on a small context ───────────────────────────
@@ -790,7 +940,10 @@ section('componente embebido');
         ok(`la API expone ${fn}()`, typeof agent[fn] === 'function');
     }
     ok('expone el estado', typeof agent.state === 'string');
-    ok('el workspace se aplicó', agent.engine.config.get('workspace.root', '').toLowerCase().includes('agentcoder'));
+    // Compared against the real cwd, not against a folder name: hard-coding
+    // one means the suite breaks the day somebody renames the checkout, and
+    // the failure says nothing about the code.
+    eq('el workspace se aplicó', P.normalize(agent.engine.config.get('workspace.root', '')), P.normalize(process.cwd()));
     ok('en embebido el plan se auto-aprueba', agent.engine.config.get('agent.autoApprovePlan') === true);
     ok('en embebido los pasos se encadenan', agent.engine.config.get('agent.autoRunSteps') === true);
 

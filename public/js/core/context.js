@@ -212,6 +212,17 @@ export class ContextManager {
         picked.reverse();
 
         const nativeTools = profile?.nativeTools;
+
+        // The budget cut can land BETWEEN an assistant `tool_calls` turn and the
+        // result it produced, and the result is the newer of the two — so it is
+        // the one that survives. That leaves a `tool` message answering nothing,
+        // which is exactly the orphan `dropEphemeral` goes out of its way to
+        // avoid, arrived at from the other end. Several chat templates reject it
+        // outright, and the turn is lost for a reason nothing in the log names.
+        while (nativeTools && picked.length && picked[0].role === 'tool') {
+            tokens -= picked.shift().tokens;
+        }
+
         const messages = picked.map(m => {
             if (m.role === 'tool') {
                 return nativeTools

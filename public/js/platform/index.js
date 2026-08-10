@@ -24,7 +24,7 @@
  */
 
 /**
- * A platform with no hands: a browser with no AgentCoder server behind it and
+ * A platform with no hands: a browser with no Rubus server behind it and
  * no native shell. Every capability refuses with an explanation rather than
  * failing obscurely, because this is the state a user lands in when they open
  * index.html directly, and the fix needs to be in the error message.

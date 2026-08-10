@@ -33,7 +33,7 @@ export function createHttpPlatform(info, token) {
                 body: JSON.stringify(payload || {})
             });
         } catch (err) {
-            const e = new Error(`Sin conexión con el servidor de AgentCoder (${route}).`);
+            const e = new Error(`Sin conexión con el servidor de Rubus (${route}).`);
             e.code = 'NO_SERVER';
             throw e;
         }
@@ -186,7 +186,7 @@ export function createHttpPlatform(info, token) {
 }
 
 /**
- * Ask the origin whether an AgentCoder server is behind it.
+ * Ask the origin whether an Rubus server is behind it.
  *
  * Returns null when there is none, so the caller can fall back to the degraded
  * browser platform instead of hanging. The token, if any, comes from the URL

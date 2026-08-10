@@ -1,5 +1,5 @@
 /**
- * AgentCoder as a component you can drop into another app.
+ * Rubus as a component you can drop into another app.
  *
  *   import { createAgent } from './js/embed/agent.js';
  *

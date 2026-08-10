@@ -1,9 +1,9 @@
 {
-  "name": "agentcoder",
+  "name": "rubus",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local agentic coding harness (Neutralino + Ollama) engineered to stay reliable on weak models.",
+  "description": "Rubus — local agentic coding harness (Neutralino + Ollama) engineered to stay reliable on weak models.",
   "scripts": {
     "start": "node server.js",
     "serve": "node server.js",

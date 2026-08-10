@@ -4,7 +4,7 @@
  * Two consumers with different needs: the UI wants the last few hundred lines
  * cheaply, and a post-mortem wants everything including the raw model output.
  * So the ring buffer stays in memory and the full record is appended to
- * `<root>/.agentcoder/logs/<session>.jsonl` in batches — one write per line
+ * `<root>/.rubus/logs/<session>.jsonl` in batches — one write per line
  * would make a chatty step cost hundreds of filesystem round trips.
  */
 
@@ -31,7 +31,7 @@ export class Logger {
     async attach(root) {
         if (!root || this.platform.degraded) { this.file = null; return; }
         try {
-            const dir = `${root}/.agentcoder/logs`;
+            const dir = `${root}/.rubus/logs`;
             await this.platform.fs.mkdirp(dir);
             this.file = `${dir}/${this.sessionId}.jsonl`;
         } catch {

@@ -14,7 +14,7 @@ export const IGNORED_DIRS = new Set([
     '.cache', 'coverage', '.nyc_output', '__pycache__', '.pytest_cache',
     '.mypy_cache', '.venv', 'venv', 'env', '.tox', '.gradle', '.idea', '.vs',
     '.vscode', 'bin', 'obj', 'vendor', 'bower_components', 'jspm_packages',
-    '.agentcoder', '.terraform', '.serverless', 'Pods', 'DerivedData'
+    '.rubus', '.agentcoder', '.terraform', '.serverless', 'Pods', 'DerivedData'
 ]);
 
 export const BINARY_EXTS = new Set([

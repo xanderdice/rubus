@@ -78,7 +78,7 @@ export async function mountApp() {
     const app = new App({ platform, bus, engine });
     await app.start();
     // Handy from the devtools console; nothing in the app depends on it.
-    globalThis.agentcoder = app;
+    globalThis.rubus = app;
     return app;
 }
 
@@ -117,7 +117,7 @@ class App {
                 // hear a rate or voice change before committing to it.
                 this.applyPreferences();
                 this.speech.say(
-                    'Hola. Soy AgentCoder. Así sonaré al leerte el plan, los permisos y el resultado de cada paso.',
+                    'Hola. Soy Rubus. Así sonaré al leerte el plan, los permisos y el resultado de cada paso.',
                     { interrupt: true }
                 );
             }

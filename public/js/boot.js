@@ -85,7 +85,7 @@
     }
 
     var TOO_OLD = [
-        'AgentCoder se ejecuta sin compilador ni empaquetador: es JavaScript',
+        'Rubus se ejecuta sin compilador ni empaquetador: es JavaScript',
         'moderno tal cual, y necesita un navegador de 2020 en adelante',
         '(Chrome 80+, Firefox 74+, Safari 13.1+, Edge 80+, o cualquier versión',
         'actual de Chrome/Firefox/Safari/Edge en móvil).',
@@ -134,7 +134,7 @@
                 return;
             }
 
-            fatal('No se pudo arrancar AgentCoder', [
+            fatal('No se pudo arrancar Rubus', [
                 String((err && err.message) || err),
                 '',
                 (err && err.stack) || '',

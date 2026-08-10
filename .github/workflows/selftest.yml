@@ -1,0 +1,32 @@
+# `npm run selftest` en cada push y cada PR.
+#
+# Sin `npm ci` y sin caché: el proyecto no tiene dependencias en tiempo de
+# ejecución y la única devDependency es el CLI de Neutralino, que las pruebas no
+# usan. Instalar aquí solo añadiría un minuto y una forma más de fallar.
+#
+# Windows además de Linux, y no por completismo: la mitad de lo que estas
+# pruebas cubren es específico de Windows — el dialecto de rutas, `cmd.exe` como
+# shell, y matar el árbol de procesos con `taskkill` en vez de con un grupo de
+# procesos POSIX. Un CI que solo corriera en Linux dejaría sin mirar justo la
+# plataforma en la que se desarrolla esto.
+name: selftest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['18', '20', '22']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm run selftest

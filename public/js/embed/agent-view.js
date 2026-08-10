@@ -3,7 +3,7 @@
  * host-supplied element.
  *
  * Self-contained on purpose. An app that embeds the agent should not have to
- * adopt AgentCoder's stylesheet, its markup or its icon sprite, so this file
+ * adopt Rubus's stylesheet, its markup or its icon sprite, so this file
  * injects one small scoped style block (once, per document) and builds
  * everything with plain elements. Class names are prefixed `ac-` so they cannot
  * collide with the host's CSS.

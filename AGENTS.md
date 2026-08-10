@@ -1,4 +1,4 @@
-# Reglas del proyecto — AgentCoder
+# Reglas del proyecto — Rubus
 
 Este archivo se inyecta en todos los prompts del agente cuando se trabaja sobre
 este repositorio. (También sirve de ejemplo de cómo escribir uno.)
@@ -26,6 +26,29 @@ este repositorio. (También sirve de ejemplo de cómo escribir uno.)
 - Comentarios en inglés; textos de interfaz y mensajes al modelo en español.
 - Comenta el **porqué**, no el qué. Si un valor o una decisión parece rara, explica
   qué fallo concreto la motivó.
+
+## El nombre: Rubus por fuera, `agentcoder` en el almacenamiento
+
+El proyecto se llamaba AgentCoder. Todo lo que **ve** el usuario dice ya Rubus:
+títulos, banner, prompts, README, binario. Lo que **persiste** conserva el
+nombre viejo a propósito, y no es un renombrado a medias:
+
+- `agentcoder.settings.v1` (localStorage) y `~/.agentcoder/settings.json`
+- `agentcoder.token` (localStorage) y `AGENTCODER_TOKEN`
+- `applicationId: dev.agentcoder.app` — Neutralino guarda por ese identificador
+- `name: 'agentcoder'` en `/api/ping`, que es el apretón de manos del cliente
+
+Cambiar cualquiera de esos no renombra un dato: lo abandona. El usuario abre la
+app y se encuentra los ajustes por defecto, sin ningún mensaje que lo explique.
+Si algún día se cambian, hace falta una migración que lea el valor viejo y
+escriba el nuevo, igual que `SETTINGS_VERSION` en `config.js`.
+
+Dos excepciones, porque ahí no se pierde nada:
+
+- Los registros se escriben en `<proyecto>/.rubus/logs/`. Son desechables.
+- Las reglas de proyecto se buscan primero en `.rubus/rules.md` y después en
+  `.agentcoder/rules.md`, que se sigue leyendo para no dejar mudo a un
+  repositorio que ya tenía uno.
 
 ## Estructura — la regla dura
 

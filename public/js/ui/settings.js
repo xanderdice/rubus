@@ -261,7 +261,7 @@ export class Settings {
             el('p', { class: 'dim', style: { lineHeight: '1.7', marginBottom: '10px' } },
                 'Un archivo del repositorio que se inyecta en TODOS los prompts y nunca se comprime. ' +
                 'Es el sitio para poner los comandos de build/test, las convenciones y las prohibiciones. ' +
-                'Se busca en: .agentcoder/rules.md, AGENTS.md, AGENT.md, CLAUDE.md, .cursorrules.')
+                'Se busca en: .rubus/rules.md, AGENTS.md, AGENT.md, CLAUDE.md, .cursorrules.')
         ]);
 
         if (!root) {

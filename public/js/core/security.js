@@ -70,8 +70,40 @@ const DANGEROUS_PATTERNS = [
     { re: /\bkill\b|\btaskkill\b|\bStop-Process\b/i, why: 'mata procesos del sistema' },
     { re: /\bchmod\b|\bchown\b|\bicacls\b|\btakeown\b/i, why: 'cambia permisos' },
     { re: /\bdocker\b|\bkubectl\b/i, why: 'controla contenedores o clústeres' },
-    { re: />\s*[^|\s]/, why: 'redirige la salida y puede sobrescribir un archivo' }
+    { match: hasFileRedirect, why: 'redirige la salida y puede sobrescribir un archivo' }
 ];
+
+/**
+ * A `>` that really redirects into a file.
+ *
+ * The obvious `/>\s*[^|\s]/` graded `npm test 2>&1` and
+ * `git commit -m "arreglo a > b"` as destructive. That is not a harmless
+ * false positive: every needless permission dialog teaches the user to
+ * approve without reading, and the dialogs that matter are the same shape.
+ *
+ * So two things do not count as a redirect: anything inside quotes, and
+ * `2>&1` / `>&2`, which duplicate a file descriptor and write no file.
+ */
+function hasFileRedirect(link) {
+    let quote = null;
+    for (let i = 0; i < link.length; i++) {
+        const c = link[i];
+        if (quote) {
+            if (c === '\\') { i++; continue; }
+            if (c === quote) quote = null;
+            continue;
+        }
+        if (c === '"' || c === "'") { quote = c; continue; }
+        if (c !== '>') continue;
+
+        let j = i + 1;
+        if (link[j] === '>') j++;                                  // `>>` appends, still a file
+        while (link[j] === ' ' || link[j] === '\t') j++;
+        if (link[j] === '&') continue;                             // fd duplication, not a file
+        if (j < link.length && link[j] !== '|') return true;
+    }
+    return false;
+}
 
 /** Never. Not with confirmation, not with a flag. */
 const BLOCKED_PATTERNS = [
@@ -134,6 +166,10 @@ export class Security {
         if (write) {
             // Writing into .git turns a recoverable mistake into a lost repo.
             if (parts[0] === '.git') throw refuse('No se puede escribir dentro de .git.');
+            // Both names: `.rubus` is where the logs go now, `.agentcoder` is
+            // where they went before the rename and may still hold a project's
+            // rules file. Neither is the agent's to overwrite.
+            if (parts[0] === '.rubus') throw refuse('No se puede escribir en .rubus (registros del propio agente).');
             if (parts[0] === '.agentcoder') throw refuse('No se puede escribir en .agentcoder (registros del propio agente).');
             if (parts.includes('node_modules')) throw refuse('No se puede escribir dentro de node_modules.');
         }
@@ -182,7 +218,7 @@ export class Security {
         if (!s) return { risk: RISK.SAFE };
 
         for (const pat of DANGEROUS_PATTERNS) {
-            if (pat.re.test(s)) return { risk: RISK.DANGEROUS, why: pat.why };
+            if (pat.re ? pat.re.test(s) : pat.match(s)) return { risk: RISK.DANGEROUS, why: pat.why };
         }
 
         const extraSafe = (this.config.get('security.extraSafeCommands', []) || [])
@@ -228,6 +264,11 @@ export function splitChain(cmd) {
         if (c === ';' || c === '\n') { out.push(buf); buf = ''; continue; }
         if ((c === '&' || c === '|') && cmd[i + 1] === c) { out.push(buf); buf = ''; i++; continue; }
         if (c === '|') { out.push(buf); buf = ''; continue; }
+        // A single `&` is a separator too — sequential in cmd.exe, backgrounding
+        // in sh — and missing it was a hole, not a nicety: `ls & node evil.js`
+        // graded as one link starting with `ls`, came back SAFE, and SAFE runs
+        // unattended by default. The `>` exception keeps `2>&1` in one piece.
+        if (c === '&' && cmd[i - 1] !== '>') { out.push(buf); buf = ''; continue; }
         buf += c;
     }
     out.push(buf);

@@ -1,5 +1,5 @@
 /**
- * AgentCoder server — `npm start`.
+ * Rubus server — `npm start`.
  *
  * Serves the app AND gives it hands. In the Neutralino desktop shell the page
  * talks to the filesystem through the native API; in a browser it cannot, so
@@ -50,6 +50,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import nodePath from 'node:path';
 import * as P from './public/js/platform/paths.js';
+import { shellFor, killTree } from './public/js/platform/kill-tree.js';
 
 const HERE = nodePath.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = nodePath.join(HERE, 'public');
@@ -208,7 +209,18 @@ async function serveStatic(req, res, pathname) {
     const file = nodePath.join(PUBLIC, rel);
 
     // Traversal guard: the resolved path must stay under public/.
-    if (!file.startsWith(PUBLIC)) { json(res, 403, { error: 'prohibido' }); return; }
+    //
+    // Not `startsWith(PUBLIC)`: that also accepts a SIBLING whose name merely
+    // begins with "public" (…/public-notas), and it is reachable — `new URL`
+    // normalises `..` and `%2e%2e` away, but not `%2f`, so
+    // `/x%2f%2e%2e%2f%2e%2e%2fpublic-notas/x` arrives here intact and escapes.
+    // This is the one route that does not go through resolvePath(), so it has
+    // to answer the containment question itself, and exactly.
+    const within = nodePath.relative(PUBLIC, file);
+    if (within === '..' || within.startsWith('..' + nodePath.sep) || nodePath.isAbsolute(within)) {
+        json(res, 403, { error: 'prohibido' });
+        return;
+    }
 
     let stat;
     try { stat = await fs.stat(file); } catch { json(res, 404, { error: 'no encontrado', path: rel }); return; }
@@ -327,24 +339,42 @@ async function execRoute(req, res, body) {
         'Cache-Control': 'no-store',
         'X-Accel-Buffering': 'no'
     });
+    // `writeHead` only queues the headers; nothing reaches the socket until the
+    // first write. A command that is slow before it prints anything — most
+    // builds — therefore left the client with no response at all, unable to
+    // tell "started, working" from "never got there", and unable to abort a
+    // request it had not yet received.
+    res.flushHeaders();
 
-    const isWindows = process.platform === 'win32';
-    const shell = isWindows
-        ? { cmd: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', command] }
-        : { cmd: '/bin/sh', args: ['-c', command] };
+    const shell = shellFor(command);
 
     const started = Date.now();
     let child;
     try {
-        child = spawn(shell.cmd, shell.args, { cwd, windowsVerbatimArguments: isWindows, windowsHide: true });
+        child = spawn(shell.cmd, shell.args, { cwd, ...shell.options });
     } catch (err) {
         res.end(JSON.stringify({ done: true, exitCode: -1, stderr: String(err.message || err) }) + '\n');
         return;
     }
 
-    // Same reasoning as the proxy: a write to a socket the client already
-    // closed emits 'error', and an unhandled one would end the process.
-    res.on('error', () => { try { child.kill('SIGKILL'); } catch { /* ya murió */ } });
+    // If the client hangs up, kill the command. Otherwise an abandoned `npm
+    // install` keeps running with nobody reading it.
+    //
+    // Two separate mistakes lived in these three lines, and each hid the other:
+    //
+    //  · The listener was on `req`. By the time we get here the POST body has
+    //    been read, so the IncomingMessage has already emitted its one and only
+    //    'close' and will never emit another — measured, an aborting client
+    //    fires `res` close at 405ms and nothing at all on `req`. It is the same
+    //    trap the Ollama proxy documents, from the opposite side.
+    //
+    //  · `child.kill()` killed the shell, not the command. See kill-tree.js.
+    //
+    // 'error' is kept alongside 'close' because a write to an already-closed
+    // socket raises it, and an unhandled 'error' on a response ends the process.
+    const stop = () => killTree(child);
+    res.on('close', stop);
+    res.on('error', stop);
 
     const send = (obj) => {
         if (res.writableEnded) return;
@@ -352,11 +382,7 @@ async function execRoute(req, res, body) {
     };
 
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; try { child.kill('SIGKILL'); } catch { /* ya murió */ } }, timeoutMs);
-
-    // If the client hangs up, kill the child. Otherwise an abandoned `npm
-    // install` keeps running with nobody reading it.
-    req.on('close', () => { try { child.kill('SIGKILL'); } catch { /* ya murió */ } });
+    const timer = setTimeout(() => { timedOut = true; stop(); }, timeoutMs);
 
     child.stdout.on('data', (b) => send({ stream: 'stdout', text: b.toString() }));
     child.stderr.on('data', (b) => send({ stream: 'stderr', text: b.toString() }));
@@ -582,7 +608,7 @@ server.listen(PORT, HOST, async () => {
     const url = `http://${shown}:${PORT}${TOKEN ? `/?token=${TOKEN}` : ''}`;
 
     console.log('');
-    console.log('  AgentCoder');
+    console.log('  Rubus');
     console.log(`  ▸ http://${shown}:${PORT}`);
     console.log(`  ▸ modo:   ${isLoopback ? 'local (sólo esta máquina)' : 'REMOTO — accesible desde la red'}`);
     console.log(`  ▸ raíz:   ${ROOT || 'sin límite (elige la carpeta desde la app)'}`);

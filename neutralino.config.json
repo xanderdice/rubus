@@ -25,11 +25,11 @@
     "debug.*"
   ],
   "globalVariables": {
-    "APP_NAME": "AgentCoder"
+    "APP_NAME": "Rubus"
   },
   "modes": {
     "window": {
-      "title": "AgentCoder",
+      "title": "Rubus",
       "width": 1500,
       "height": 940,
       "minWidth": 1040,
@@ -47,7 +47,7 @@
     }
   },
   "cli": {
-    "binaryName": "agentcoder",
+    "binaryName": "rubus",
     "resourcesPath": "/public/",
     "extensionsPath": "/extensions/",
     "clientLibrary": "/public/vendor/neutralino.js",

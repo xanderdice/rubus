@@ -15,6 +15,11 @@ import * as P from '../platform/paths.js';
 import { estimateTokens, truncate } from './util.js';
 
 const CANDIDATES = [
+    '.rubus/rules.md',
+    // The old name, still read: a project that already keeps its rules here
+    // would otherwise go silently unruled after the rename, and "the agent
+    // stopped respecting my conventions" is not a symptom anyone traces back
+    // to a renamed folder. New projects get `.rubus/`; nothing has to move.
     '.agentcoder/rules.md',
     'AGENTS.md',
     'AGENT.md',

@@ -15,6 +15,7 @@ import { promises as nodefs } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import * as P from './paths.js';
+import { shellFor, killTree } from './kill-tree.js';
 
 export function createNodePlatform() {
     const isWindows = process.platform === 'win32';
@@ -71,17 +72,11 @@ export function createNodePlatform() {
         const started = Date.now();
 
         return new Promise((resolve) => {
-            const shell = isWindows
-                ? { cmd: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', command] }
-                : { cmd: '/bin/sh', args: ['-c', command] };
+            const shell = shellFor(command);
 
             let child;
             try {
-                child = spawn(shell.cmd, shell.args, {
-                    cwd: cwd || process.cwd(),
-                    windowsVerbatimArguments: isWindows,
-                    windowsHide: true
-                });
+                child = spawn(shell.cmd, shell.args, { cwd: cwd || process.cwd(), ...shell.options });
             } catch (err) {
                 resolve({
                     stdout: '', stderr: String(err && err.message || err),
@@ -96,9 +91,11 @@ export function createNodePlatform() {
             let timedOut = false;
             let settled = false;
 
+            // The whole tree, not just the shell — otherwise "timed out" is a
+            // label on a process that is still running. See kill-tree.js.
             const timer = setTimeout(() => {
                 timedOut = true;
-                try { child.kill('SIGKILL'); } catch { /* already dead */ }
+                killTree(child);
             }, timeoutMs);
 
             child.stdout.on('data', (b) => {
@@ -131,9 +128,10 @@ export function createNodePlatform() {
         });
     }
 
+    /** Everything we started, and everything it started. The Cancel button. */
     async function killAll() {
         for (const child of [...running]) {
-            try { child.kill('SIGKILL'); } catch { /* already dead */ }
+            killTree(child);
             running.delete(child);
         }
     }

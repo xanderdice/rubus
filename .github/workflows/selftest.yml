@@ -17,6 +17,8 @@ on:
   pull_request:
 
 jobs:
+  # Sin `npm install`, y eso es la mitad de la prueba: si este trabajo pasa,
+  # clonar y ejecutar sigue funcionando sin instalar nada.
   test:
     strategy:
       fail-fast: false
@@ -30,3 +32,18 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm run selftest
+
+  # El lint sí necesita sus dependencias, así que va en un trabajo aparte para
+  # no contaminar el de arriba. `--strict` y sin `--fix`: en CI se comprueba, no
+  # se corrige — un arreglo automático que nadie ha visto no debería colarse en
+  # un PR verde.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint

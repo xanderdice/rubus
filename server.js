@@ -51,6 +51,8 @@ import { fileURLToPath } from 'node:url';
 import nodePath from 'node:path';
 import * as P from './public/js/platform/paths.js';
 import { shellFor, killTree } from './public/js/platform/kill-tree.js';
+import { validateUrl, isPrivateAddress, MAX_FETCH_BYTES } from './public/js/core/web.js';
+import dns from 'node:dns/promises';
 
 const HERE = nodePath.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = nodePath.join(HERE, 'public');
@@ -394,6 +396,110 @@ async function execRoute(req, res, body) {
     });
 }
 
+/* ── web proxy ───────────────────────────────────────────────────────────── */
+
+/**
+ * Trae una página de internet para el agente.
+ *
+ * Existe por lo mismo que el proxy de Ollama: una página servida desde este
+ * origen no puede leer duckduckgo.com ni MDN, porque ninguno manda CORS.
+ *
+ * Y aquí es donde está la seguridad de verdad, no en el cliente. El cliente ya
+ * valida la URL, pero el cliente es NUESTRO cliente sólo cuando queremos: en
+ * modo remoto quien manda el JSON es cualquiera que alcance el puerto, y una
+ * ruta que pide URLs arbitrarias desde dentro de la red es un SSRF de manual.
+ * Por eso se valida otra vez, se resuelve el nombre y se comprueba la IP —un
+ * dominio público puede apuntar a 127.0.0.1 y nadie se lo impide— y se siguen
+ * las redirecciones A MANO, porque un 302 hacia 169.254.169.254 se saltaría
+ * cualquier comprobación hecha sólo sobre la primera URL.
+ */
+async function webRoute(req, res, body) {
+    const timeoutMs = Math.min(Number(body.timeoutMs) || 20000, 60000);
+
+    let objetivo = validateUrl(body.url);
+    if (!objetivo.ok) { json(res, 400, { ok: false, error: objetivo.reason }); return; }
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    res.on('close', () => { if (!res.writableEnded) ctrl.abort(); });
+
+    try {
+        let hops = 0;
+        for (;;) {
+            const permitido = await resuelveYComprueba(objetivo.host);
+            if (!permitido.ok) { json(res, 403, { ok: false, error: permitido.error }); return; }
+
+            const upstream = await fetch(objetivo.url, {
+                redirect: 'manual',
+                signal: ctrl.signal,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (compatible; Rubus/0.1)',
+                    Accept: 'text/html,text/plain,application/json;q=0.9,*/*;q=0.5'
+                }
+            });
+
+            const location = upstream.headers.get('location');
+            if (upstream.status >= 300 && upstream.status < 400 && location) {
+                if (++hops > 5) { json(res, 400, { ok: false, error: 'demasiadas redirecciones' }); return; }
+                const siguiente = validateUrl(new URL(location, objetivo.url).href);
+                if (!siguiente.ok) {
+                    json(res, 403, { ok: false, error: `la redirección apunta a un sitio no permitido: ${siguiente.reason}` });
+                    return;
+                }
+                objetivo = siguiente;
+                continue;
+            }
+
+            const tipo = upstream.headers.get('content-type') || '';
+            if (tipo && !/text|json|xml|javascript/i.test(tipo)) {
+                json(res, 200, { ok: true, status: upstream.status, contentType: tipo, body: '', url: objetivo.url });
+                return;
+            }
+
+            // Recortado al leer y no después: una descarga de 400 MB no puede
+            // meterse entera en memoria sólo para tirarla a continuación.
+            const texto = await leerHasta(upstream, MAX_FETCH_BYTES);
+            json(res, 200, { ok: true, status: upstream.status, contentType: tipo, body: texto, url: objetivo.url });
+            return;
+        }
+    } catch (err) {
+        if (ctrl.signal.aborted) { if (!res.writableEnded) json(res, 200, { ok: false, error: 'cancelado o agotado el tiempo' }); return; }
+        json(res, 200, { ok: false, error: String(err && err.message || err) });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** El nombre puede ser público y la IP no. Se pregunta al DNS y se mira. */
+async function resuelveYComprueba(host) {
+    if (isPrivateAddress(host)) return { ok: false, error: `${host} es una dirección local` };
+    try {
+        const direcciones = await dns.lookup(host, { all: true });
+        const mala = direcciones.find(d => isPrivateAddress(d.address));
+        if (mala) {
+            return { ok: false, error: `${host} resuelve a ${mala.address}, que es una dirección de red local` };
+        }
+        return { ok: true };
+    } catch {
+        return { ok: false, error: `no se pudo resolver ${host}` };
+    }
+}
+
+async function leerHasta(upstream, maxBytes) {
+    if (!upstream.body) return '';
+    const lector = upstream.body.getReader();
+    const trozos = [];
+    let total = 0;
+    for (;;) {
+        const { done, value } = await lector.read();
+        if (done) break;
+        total += value.length;
+        trozos.push(value);
+        if (total >= maxBytes) { try { await lector.cancel(); } catch { /* ya cerrado */ } break; }
+    }
+    return Buffer.concat(trozos.map(t => Buffer.from(t))).subarray(0, maxBytes).toString('utf8');
+}
+
 /* ── Ollama proxy ────────────────────────────────────────────────────────── */
 
 /**
@@ -473,7 +579,18 @@ const server = http.createServer(async (req, res) => {
     try { url = new URL(req.url, `http://${req.headers.host || 'localhost'}`); }
     catch { json(res, 400, { error: 'URL inválida' }); return; }
 
-    const pathname = decodeURIComponent(url.pathname);
+    // decodeURIComponent lanza URIError con cualquier %-escape malformado
+    // (`/%`, `/%zz`, `/a%2`), y estaba FUERA del try: la petición moría sin
+    // respuesta, el navegador se quedaba esperando hasta el timeout y el
+    // manejador de excepciones no capturadas escribía un rastro por cada
+    // escaneo automático que pasara por delante.
+    let pathname;
+    try {
+        pathname = decodeURIComponent(url.pathname);
+    } catch {
+        json(res, 400, { error: 'Ruta mal codificada.' });
+        return;
+    }
 
     try {
         if (!pathname.startsWith('/api/')) {
@@ -503,6 +620,12 @@ const server = http.createServer(async (req, res) => {
         if (!authorize(req, url)) { json(res, 401, { error: 'Token inválido o ausente.' }); return; }
 
         if (pathname.startsWith('/api/ollama')) { await ollamaProxy(req, res, pathname); return; }
+
+        if (pathname === '/api/web') {
+            if (req.method !== 'POST') { json(res, 405, { error: 'usa POST' }); return; }
+            await webRoute(req, res, await readJson(req));
+            return;
+        }
 
         if (pathname === '/api/exec') {
             if (req.method !== 'POST') { json(res, 405, { error: 'usa POST' }); return; }

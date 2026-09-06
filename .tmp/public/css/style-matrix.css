@@ -1,0 +1,149 @@
+/* ==========================================================================
+   Scenvex — Matrix theme (the one and only green)
+
+   Every rule here is scoped to :root[data-theme="matrix"], and that scoping is
+   load-bearing rather than tidiness.
+
+   This sheet is appended to <head> the first time Matrix is chosen and is never
+   removed — there is nowhere to remove it to, and reloading it on every switch
+   would flash. So it stays in the cascade for the rest of the session, under
+   every other theme. It previously opened with
+
+       :root, [data-theme="matrix"] { --bg-0: …; --text: …; --bloom: … }
+
+   and that bare `:root` is unconditional: once loaded, it overrode the base
+   sheet's variables permanently. Switching back to Ice cleared the attribute,
+   so the scoped rules stopped — but the backgrounds, text colours, lines and
+   glows stayed Matrix green, while the accent followed the new theme because
+   preferences.js writes --ice inline on the root element and inline styles win.
+   The result was one theme's accent over another theme's chrome.
+
+   The attribute lives on <html>, not <body>, so :root[data-theme] matches and
+   the descendant selectors below can still reach body and #app.
+   ========================================================================== */
+
+/* The green that powers everything. Matrix cyan is brighter; this keeps the
+   character-cascade legible by leaving enough contrast on dark backgrounds. */
+:root[data-theme="matrix"] {
+    --ice: 0, 255, 65;
+    --ice-hot: 180, 255, 149;
+
+    --bg-0: #0a0a0a;
+    --bg-1: #0c0f0c;
+    --bg-2: #0d120d;
+    --bg-3: #111a11;
+
+    --line: rgba(var(--ice), .14);
+    --line-mid: rgba(var(--ice), .25);
+    --line-hot: rgba(var(--ice), .50);
+
+    --text: #0f6;
+    --text-dim: #073636;
+    --text-hot: #cfff9a;
+
+    /* danger/warn barely used in chrome; keep semantically correct rather than
+       thematic so alert states stay readable */
+
+    /* bloom — the backdrop-filters already recolor with --ice, but the glow
+       helper variables are used on individual buttons/tooltips and need a green tint.
+       Matrix: slightly stronger bloom because green glows pop less than cyan. */
+    --bloom: .85;
+    --glow-s: 0 0 12px rgba(var(--ice), calc(.24 * var(--bloom))), 0 0 4px #060;
+    --glow-m: 0 0 24px rgba(var(--ice), calc(.22 * var(--bloom))), 0 0 8px #080, 0 0 3px #0a0;
+    --glow-l: 0 0 38px rgba(var(--ice), calc(.18 * var(--bloom))), 0 0 14px #060, 0 0 5px #090;
+    --text-glow: 0 0 28px rgba(var(--ice), calc(.34 * var(--bloom)));
+    --text-glow-hot: 0 0 36px rgba(var(--ice-hot), calc(.42 * var(--bloom))), 0 0 60px rgba(var(--ice), calc(.26 * var(--bloom)));
+
+    /* body background slightly darker to simulate CRT phosphor */
+}
+
+:root[data-theme="matrix"] body {
+    background: #050805;
+    color-scheme: dark;
+}
+
+/* The bloom ambient overlay now tints green automatically via --ice.
+   We also make the radial pooling a bit more intense so the corners get that
+   CRT-vignette glow. */
+:root[data-theme="matrix"] .bloom-ambient {
+    opacity: calc(.35 * var(--bloom));
+    background:
+        radial-gradient(54% 38% at 50% 0%, rgba(var(--ice), .16), transparent 72%),
+        radial-gradient(38% 34% at 0% 46%, rgba(var(--ice), .12), transparent 74%),
+        radial-gradient(38% 34% at 100% 46%, rgba(var(--ice), .12), transparent 74%),
+        radial-gradient(64% 28% at 50% 100%, rgba(var(--ice), .10), transparent 76%);
+}
+
+/* Scanline colour shift: green-tinted instead of black */
+:root[data-theme="matrix"] body::before {
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(var(--ice), .05) 0 1px,
+        transparent 1px 3px
+    );
+    background-blend-mode: screen;
+}
+
+/* CRT subtle flicker instead of the generic bloom-flicker.
+   Same chrome-only selector the base sheet uses: the rendered image never
+   flickers, whatever the theme. */
+:root[data-theme="matrix"] #menubar,
+:root[data-theme="matrix"] #statusbar,
+:root[data-theme="matrix"] #hierarchy-panel,
+:root[data-theme="matrix"] #inspector-panel,
+:root[data-theme="matrix"] #assets-panel {
+    animation: matrix-flicker 8s steps(1) infinite;
+}
+@keyframes matrix-flicker {
+    0%, 93.5%, 100% { opacity: 1; }
+    94% { opacity: .96; }
+    94.3% { opacity: 1; }
+    95.2% { opacity: .975; }
+}
+
+/* Subtle vertical light-streaks through the chrome — column of green that
+   fades to nothing, mimicking the cascade seen throughout the Matrix UI. */
+:root[data-theme="matrix"] #app::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 50%; width: 1px; bottom: 0;
+    /* Below #canvas-container (460), with the other bloom layers. At 600 this
+       green column was drawn straight over the rendered image — the one piece
+       of theme decoration that actually reached the viewport. */
+    z-index: 402;
+    pointer-events: none;
+    transform: translateX(-.5px);
+    background: linear-gradient(180deg, transparent, rgba(var(--ice), .03) 40%, rgba(var(--ice), .02) 60%, transparent);
+    animation: streak 9s steps(1) infinite;
+}
+@keyframes streak {
+    0% { left: 35%; opacity: 0; }
+    2% { opacity: 1; }
+    85% { opacity: .6; }
+    97% { opacity: 0; }
+    100% { opacity: 0; }
+}
+
+/* ==========================================================================
+   The same opt-outs the base sheet honours.
+
+   These rules are more specific than the base sheet's `#menubar { animation:
+   none }`, and they come from a later stylesheet, so without repeating the
+   exclusions here Matrix would keep animating for a user who asked for reduced
+   motion or turned bloom off — quietly overriding both settings.
+   ========================================================================== */
+:root[data-theme="matrix"] body[data-bloom="off"] #menubar,
+:root[data-theme="matrix"] body[data-bloom="off"] #statusbar,
+:root[data-theme="matrix"] body[data-bloom="off"] #hierarchy-panel,
+:root[data-theme="matrix"] body[data-bloom="off"] #inspector-panel,
+:root[data-theme="matrix"] body[data-bloom="off"] #assets-panel { animation: none; }
+:root[data-theme="matrix"] body[data-bloom="off"] #app::after { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+    :root[data-theme="matrix"] #menubar,
+    :root[data-theme="matrix"] #statusbar,
+    :root[data-theme="matrix"] #hierarchy-panel,
+    :root[data-theme="matrix"] #inspector-panel,
+    :root[data-theme="matrix"] #assets-panel { animation: none; }
+    :root[data-theme="matrix"] #app::after { animation: none; }
+}

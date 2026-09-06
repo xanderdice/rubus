@@ -141,3 +141,14 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Motores de terceros que trae `npm run setup` / `npm run setup:design`.
+# Se descargan, no se versionan: son megas de código minificado que nadie va
+# a leer en un diff y que cada clon bajaría aunque no abra el estudio.
+public/vendor/
+
+# Lo que Rubus escribe dentro de CADA proyecto sobre el que trabaja: los
+# registros de sesión y la memoria. `.rubus/logs/` ya caía por la regla
+# genérica `logs` de arriba, pero memory.md no, y aparecía como archivo sin
+# versionar en el repositorio del usuario después de la primera ejecución.
+.rubus/

@@ -5,18 +5,26 @@
   "type": "module",
   "description": "Rubus — local agentic coding harness (Neutralino + Ollama) engineered to stay reliable on weak models.",
   "scripts": {
+    "prestart": "node scripts/lint.js --fix",
     "start": "node server.js",
     "serve": "node server.js",
     "setup": "neu update",
+    "predev": "node scripts/lint.js --fix",
     "dev": "neu run",
+    "prebuild": "node scripts/lint.js --fix --strict",
     "build": "neu build --release",
     "headless": "node public/js/cli/headless.js",
-    "selftest": "node public/js/test/selftest.js"
+    "selftest": "node public/js/test/selftest.js",
+    "lint": "node scripts/lint.js --strict",
+    "lint:fix": "node scripts/lint.js --fix",
+    "setup:design": "node scripts/fetch-playcanvas.js"
   },
   "engines": {
     "node": ">=18"
   },
   "devDependencies": {
-    "@neutralinojs/neu": "^11.7.2"
+    "@neutralinojs/neu": "^11.7.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.11.0"
   }
 }

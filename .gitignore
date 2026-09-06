@@ -152,3 +152,10 @@ public/vendor/
 # genérica `logs` de arriba, pero memory.md no, y aparecía como archivo sin
 # versionar en el repositorio del usuario después de la primera ejecución.
 .rubus/
+
+# Artefactos de Neutralino. Los trae `neu update` y los genera `neu build`:
+# 15 MB de binarios de todas las plataformas y el bundle de la release. `dist/`
+# ya estaba; `bin/` y `.tmp/` no, y aparecían como archivos sin versionar
+# después del primer build.
+bin/
+.tmp/

@@ -3107,6 +3107,316 @@ section('web/registro de herramientas');
     ok('y search_codebase también', act.indexOf('search_codebase') < act.indexOf('search_web'));
 }
 
+// ── app de escritorio: detectar el shell y no fiarse de `neu` ─────────────
+// Los dos fallos que dejaban la app "abierta pero sin manos", y que no daban
+// ningún error a la vista: por eso tienen prueba.
+section('escritorio/detección del shell');
+{
+    const { enElShell } = await import('../platform/index.js');
+
+    const conGlobales = (globales, sesion) => {
+        const previos = {};
+        for (const k of ['NL_TOKEN', 'NL_PORT', 'NL_APPID']) { previos[k] = globalThis[k]; delete globalThis[k]; }
+        const antesSesion = globalThis.sessionStorage;
+        Object.assign(globalThis, globales);
+        if (sesion !== undefined) {
+            globalThis.sessionStorage = { getItem: (k) => (k === 'NL_TOKEN' ? sesion : null) };
+        }
+        try { return enElShell(); }
+        finally {
+            for (const k of Object.keys(globales)) delete globalThis[k];
+            for (const [k, v] of Object.entries(previos)) if (v !== undefined) globalThis[k] = v;
+            if (antesSesion === undefined) delete globalThis.sessionStorage;
+            else globalThis.sessionStorage = antesSesion;
+        }
+    };
+
+    eq('un navegador pelado no es el shell', conGlobales({}), false);
+    eq('con NL_TOKEN sí lo es', conGlobales({ NL_TOKEN: 'abc' }), true);
+
+    // El fallo real: con `tokenSecurity: "one-time"` el token global existe una
+    // sola vez. El cliente lo copia a sessionStorage y a partir de la primera
+    // RECARGA sólo está ahí. Mirando únicamente el global, la app de escritorio
+    // se daba por navegador, sondeaba /api/ping contra sus propios recursos y
+    // acababa en la plataforma degradada: ventana abierta, cero errores, cero
+    // acceso al disco.
+    eq('tras recargar, el token vive en sessionStorage', conGlobales({}, 'abc'), true);
+    eq('y los otros globales del shell también valen', conGlobales({ NL_PORT: 8080 }), true);
+    eq('NL_APPID igual', conGlobales({ NL_APPID: 'dev.x.app' }), true);
+
+    // sessionStorage puede lanzar (almacenamiento bloqueado); eso no puede
+    // tumbar el arranque, sólo significa "no es el shell".
+    const previo = globalThis.sessionStorage;
+    globalThis.sessionStorage = { getItem() { throw new Error('bloqueado'); } };
+    let reventó = false;
+    try { eq('si sessionStorage lanza, no es el shell', enElShell(), false); }
+    catch { reventó = true; }
+    if (previo === undefined) delete globalThis.sessionStorage; else globalThis.sessionStorage = previo;
+    ok('y no propaga la excepción', !reventó);
+}
+
+section('escritorio/scripts y artefactos');
+{
+    const nodefs = (await import('node:fs')).default;
+    const np = (await import('node:path')).default;
+    const { fileURLToPath: u2p } = await import('node:url');
+    const raiz = np.resolve(np.dirname(u2p(import.meta.url)), '..', '..', '..');
+    const pkg = JSON.parse(nodefs.readFileSync(np.join(raiz, 'package.json'), 'utf8'));
+
+    // Lo que pidió el usuario, fijado: start compila Y abre, build sólo compila.
+    ok('npm start compila y abre', /desktop\.js.*--run/.test(pkg.scripts.start), pkg.scripts.start);
+    ok('npm run build sólo compila', /desktop\.js\s*$/.test(pkg.scripts.build), pkg.scripts.build);
+    eq('el servidor web se queda en serve', pkg.scripts.serve, 'node server.js');
+    ok('y dev sigue siendo la iteración rápida', /neu run/.test(pkg.scripts.dev), pkg.scripts.dev);
+
+    // El lint sigue delante de los tres, que es lo que lo hace útil.
+    for (const k of ['prestart', 'prebuild', 'predev']) {
+        ok(`${k} pasa el lint`, /scripts\/lint\.js/.test(pkg.scripts[k] || ''), pkg.scripts[k]);
+    }
+
+    // Los artefactos del build no se versionan. `bin/` son 15 MB de binarios de
+    // todas las plataformas y aparecían como archivos sin versionar en cuanto
+    // alguien ejecutaba `npm run setup`.
+    const ignore = nodefs.readFileSync(np.join(raiz, '.gitignore'), 'utf8');
+    for (const p of ['bin/', 'dist', '.tmp/', 'public/vendor/']) {
+        ok(`.gitignore cubre ${p}`, ignore.split('\n').some(l => l.trim() === p), p);
+    }
+
+    // Ignorarlos no basta: `.gitignore` no desversiona lo que ya está dentro.
+    // `.tmp/` es la copia de `public/` que `neu build` crea y destruye, y estaba
+    // versionada — con los 3,5 MB de PlayCanvas dentro — así que cada
+    // compilación dejaba 76 borrados en `git status` y la regla de arriba pasaba
+    // igual. Se comprueba el índice, no el archivo de reglas.
+    const git = (await import('node:child_process')).spawnSync(
+        'git', ['ls-files', '--', '.tmp', 'dist', 'bin', 'public/vendor'],
+        { cwd: raiz, encoding: 'utf8' });
+    if (git.error || git.status !== 0) {
+        // Sin git (descarga en tarball) no hay índice que mirar; no es un fallo.
+        console.log('  · índice de git no disponible: no se comprueba');
+    } else {
+        const seguidos = git.stdout.split('\n').filter(Boolean);
+        ok('y ninguno está versionado', seguidos.length === 0,
+            `${seguidos.length} archivo(s), p.ej. ${seguidos.slice(0, 2).join(', ')}`);
+    }
+
+    // El envoltorio no puede fiarse del código de salida de `neu`: devuelve 0
+    // aunque escriba ERRR y no genere nada. Comprobado en esta misma sesión con
+    // el cliente sin descargar.
+    const desktop = nodefs.readFileSync(np.join(raiz, 'scripts', 'desktop.js'), 'utf8');
+    ok('el build se valida por el archivo, no por el exit code',
+        /mtimeMs/.test(desktop) && /No se pudo ejecutar el CLI|no hay ejecutable/.test(desktop));
+    ok('y el CLI se llama por su archivo, no por npx',
+        /neu.*bin.*neu\.js/.test(desktop) && !/npx\.cmd/.test(desktop),
+        'en Windows `npx` es un .cmd y Node se niega a lanzarlo sin shell');
+}
+
+// ── el documento que desaparece bajo los pies ─────────────────────────────
+// El cliente de Neutralino, cuando su WebSocket contra el núcleo da error, hace
+// `document.body.innerText = ''` y `document.write(...)`: borra la página, y de
+// forma asíncrona, cuando boot.js ya había lanzado el import(). El montaje se
+// encontraba un documento vacío y reventaba en VirtualScroller con un «Cannot
+// read properties of null» que no nombraba ni el elemento ni la causa.
+section('escritorio/documento borrado por el shell');
+{
+    const { must } = await import('../ui/dom.js');
+
+    const conDocumento = (doc, fn) => {
+        const antesDoc = globalThis.document;
+        const antesLoc = globalThis.location;
+        globalThis.document = doc;
+        if (antesLoc === undefined) globalThis.location = { href: 'http://localhost:1/' };
+        try { return fn(); }
+        finally {
+            if (antesDoc === undefined) delete globalThis.document; else globalThis.document = antesDoc;
+            if (antesLoc === undefined) delete globalThis.location; else globalThis.location = antesLoc;
+        }
+    };
+
+    const nodo = { etiqueta: 'div' };
+    const entero = {
+        readyState: 'complete',
+        body: { children: { length: 13 } },
+        querySelector: (s) => (s === '#chat-scroll' ? nodo : null)
+    };
+    const vacio = { readyState: 'complete', body: { children: { length: 0 } }, querySelector: () => null };
+
+    eq('must devuelve el nodo cuando está', conDocumento(entero, () => must('#chat-scroll')), nodo);
+
+    let msg = '';
+    conDocumento(vacio, () => { try { must('#chat-scroll'); } catch (e) { msg = e.message; } });
+    ok('must lanza en vez de devolver null', !!msg, msg);
+    ok('y nombra el elemento que falta', msg.includes('#chat-scroll'), msg);
+    ok('y dice que el documento estaba vacío', /0 hijos/.test(msg), msg);
+    ok('y en qué estado estaba', /readyState=complete/.test(msg), msg);
+}
+
+section('escritorio/arranque a prueba del borrado');
+{
+    const nodefs = (await import('node:fs')).default;
+    const np = (await import('node:path')).default;
+    const { fileURLToPath: u2p } = await import('node:url');
+    const raiz = np.resolve(np.dirname(u2p(import.meta.url)), '..', '..', '..');
+    const leer = (...p) => nodefs.readFileSync(np.join(raiz, ...p), 'utf8');
+    const boot = leer('public', 'js', 'boot.js');
+
+    // El orden ES el arreglo: no se monta nada hasta saber si el shell conectó.
+    // Si alguien vuelve a montar antes, el fallo original regresa entero.
+    const montaje = '.then(function (mod) { return mod.mountApp(); })';
+    ok('no se importa la app hasta que el núcleo responde',
+        /nucleoListo\(initNeutralino\(\)\)/.test(boot)
+        && boot.indexOf('nucleoListo(initNeutralino())') < boot.indexOf(montaje));
+    ok('se espera al evento ready del cliente', /events\.on\('ready'/.test(boot));
+    ok('con un plazo, no una espera infinita', /ESPERA_NUCLEO/.test(boot));
+    ok('un documento vaciado se reconoce por el body sin hijos',
+        /body\.children\.length === 0/.test(boot));
+    ok('y se nombra la causa real en vez del TypeError', /NE_CL_IVCTOKN/.test(boot));
+
+    // En la app empaquetada no hay consola a la vista: la única copia del fallo
+    // se la lleva el usuario al cerrar la ventana si no queda en el log.
+    ok('el fallo de arranque se copia al log nativo', /Neutralino\.debug\.log/.test(boot));
+
+    // Los elementos estructurales ya no se leen con `$`, que devuelve null callado.
+    ok('#chat-scroll es obligatorio', /must\('#chat-scroll'\)/.test(leer('public', 'js', 'ui', 'chat.js')));
+    ok('#explorer-body también', /must\('#explorer-body'\)/.test(leer('public', 'js', 'ui', 'explorer.js')));
+
+    // El token de un solo uso rompía la app entera y no lo parecía: el webview
+    // pide __neutralino_globals.js con su preload ANTES que la página, se lleva
+    // el único token, y la página acaba con NL_TOKEN=''. El cliente abre
+    // entonces el socket con connectToken=undefined, el núcleo lo rechaza, y su
+    // manejador de error BORRA el documento. Salía como un fallo del scroller.
+    const cfg = JSON.parse(leer('neutralino.config.json'));
+    ok('el token del shell no es de un solo uso', cfg.tokenSecurity !== 'one-time', String(cfg.tokenSecurity));
+}
+
+// ── claves de almacenamiento en el shell ──────────────────────────────────
+// `Neutralino.storage.setData` sólo acepta ^[a-zA-Z-_0-9]{1,50}$ y lanza
+// NE_ST_INVSTKY con cualquier otra cosa. La clave de ajustes lleva puntos, así
+// que en la app de escritorio los ajustes NO se guardaron nunca; el síntoma que
+// se veía era «No se pudo abrir la carpeta», porque abrir una carpeta es lo
+// primero que escribe. Estuvo oculto mientras el puente nativo estaba caído.
+section('escritorio/claves de almacenamiento');
+{
+    const { claveNativa } = await import('../platform/neutralino.js');
+    const LEGAL = /^[a-zA-Z\-_0-9]{1,50}$/;
+    const nodefs2 = (await import('node:fs')).default;
+    const np2 = (await import('node:path')).default;
+    const { fileURLToPath: u2p2 } = await import('node:url');
+    const raiz2 = np2.resolve(np2.dirname(u2p2(import.meta.url)), '..', '..', '..');
+
+    // La clave de verdad, leída de config.js: si alguien la cambia, esto sigue
+    // vigilando la de después, no una copia que se quedó vieja aquí.
+    const fuente = nodefs2.readFileSync(np2.join(raiz2, 'public', 'js', 'core', 'config.js'), 'utf8');
+    const real = /STORAGE_KEY\s*=\s*'([^']+)'/.exec(fuente);
+    ok('se encuentra STORAGE_KEY en config.js', !!real, String(real));
+    ok('y la clave real sale legal para Neutralino', LEGAL.test(claveNativa(real ? real[1] : '')),
+        real ? `${real[1]} -> ${claveNativa(real[1])}` : '');
+
+    eq('agentcoder.settings.v1 pierde los puntos',
+        claveNativa('agentcoder.settings.v1'), 'agentcoder_settings_v1');
+
+    // Una clave que ya es legal no se toca: si se tocara, se abandonaría lo
+    // que hubiera guardado con ella.
+    eq('una clave legal pasa intacta', claveNativa('ajustes_v2'), 'ajustes_v2');
+    eq('los guiones también son legales', claveNativa('a-b-c'), 'a-b-c');
+
+    for (const k of ['con espacio', 'con/barra', 'con:dos', 'ñ y acento', '', 'x'.repeat(80),
+        'punto.' + 'y'.repeat(60)]) {
+        ok(`sale legal: ${JSON.stringify(k).slice(0, 24)}`, LEGAL.test(claveNativa(k)), claveNativa(k));
+    }
+
+    // Recortar a 50 juntaría dos claves largas distintas en la misma, y una
+    // colisión aquí es que unos ajustes pisen a otros sin avisar.
+    const larga1 = 'a'.repeat(48) + '.uno';
+    const larga2 = 'a'.repeat(48) + '.dos';
+    ok('dos claves largas distintas no colisionan', claveNativa(larga1) !== claveNativa(larga2),
+        `${claveNativa(larga1)} vs ${claveNativa(larga2)}`);
+    ok('y ambas caben en el límite', claveNativa(larga1).length <= 50 && claveNativa(larga2).length <= 50);
+
+    // Determinista: la misma clave tiene que dar siempre lo mismo, o los
+    // ajustes se perderían entre arranques.
+    eq('es determinista', claveNativa(larga1), claveNativa(larga1));
+
+    // Y el adaptador tiene que usarla en las DOS operaciones: si `set` traduce
+    // y `get` no, se escribe en un sitio y se lee de otro.
+    const adaptador = nodefs2.readFileSync(np2.join(raiz2, 'public', 'js', 'platform', 'neutralino.js'), 'utf8');
+    ok('getData usa la clave traducida', /getData\(claveNativa\(key\)/.test(adaptador));
+    ok('setData también', /setData\(claveNativa\(key\)/.test(adaptador));
+}
+
+// ── el núcleo que no contesta ─────────────────────────────────────────────
+// `filesystem.readFile` mete el contenido en un JSON, y el núcleo no consigue
+// serializarlo cuando los bytes no son UTF-8 válido: apunta NE_SR_UNBPARS en su
+// log y NO CONTESTA — ni éxito ni error. Medido contra el núcleo 5.5.0 vivo con
+// un .js de once bytes en cp1252. Como el cliente no tiene plazo, la promesa se
+// queda sin resolver para siempre: un solo archivo así colgaba el mapa del
+// repositorio, y Cancelar no rescataba porque el await de dentro nunca vuelve.
+section('escritorio/el núcleo que no contesta');
+{
+    const { conPlazo, createNeutralinoPlatform } = await import('../platform/neutralino.js');
+
+    // El plazo no arregla la causa: convierte «colgado» en un error normal.
+    const rapida = await conPlazo(Promise.resolve('vale'), 'algo', 500);
+    eq('lo que responde a tiempo pasa igual', rapida, 'vale');
+
+    let colgado = null;
+    try { await conPlazo(new Promise(() => {}), 'leer algo', 120); }
+    catch (e) { colgado = e; }
+    ok('una promesa que no se resuelve acaba en error', !!colgado);
+    eq('y se distingue por su código', colgado && colgado.code, 'NE_SIN_RESPUESTA');
+    ok('el mensaje dice qué se estaba haciendo', /leer algo/.test(colgado ? colgado.message : ''), colgado && colgado.message);
+
+    let propagado = null;
+    try { await conPlazo(Promise.reject(new Error('fallo real')), 'algo', 500); }
+    catch (e) { propagado = e; }
+    ok('un error de verdad sigue subiendo tal cual', propagado && propagado.message === 'fallo real');
+
+    // Y el camino de lectura ya no pasa por readFile.
+    const antesNL = globalThis.Neutralino;
+    const antesOS = globalThis.NL_OS;
+    const cp1252 = new Uint8Array([0x2f, 0x2f, 0x20, 0x76, 0x65, 0x72, 0x73, 0x69, 0xF3, 0x6e, 0x0a]);
+    let escrito = null;
+    let usoReadFile = false;
+    globalThis.NL_OS = 'Windows';
+    globalThis.Neutralino = {
+        events: { on() {} },
+        filesystem: {
+            readFile: async () => { usoReadFile = true; return new Promise(() => {}); },
+            readBinaryFile: async () => cp1252.buffer,
+            writeFile: async () => { usoReadFile = true; return new Promise(() => {}); },
+            writeBinaryFile: async (_p, buf) => { escrito = new Uint8Array(buf); },
+            getStats: async () => ({ isFile: true, isDirectory: false, size: 0, modifiedAt: 0 }),
+            createDirectory: async () => {}
+        }
+    };
+    try {
+        const plataforma = createNeutralinoPlatform();
+
+        const texto = await plataforma.fs.readText('C:/lab/cp1252.js');
+        ok('un archivo que no es UTF-8 se lee en vez de colgarse', typeof texto === 'string', JSON.stringify(texto));
+        eq('y los bytes malos salen como U+FFFD', texto, '// versi\uFFFDn\n');
+        ok('sin pasar por readFile', !usoReadFile);
+
+        // El otro sentido: medio par suplente, que es lo que deja un modelo al
+        // partir un emoji. Antes tampoco se resolvía.
+        await plataforma.fs.writeText('C:/lab/roto.txt', 'hola \uD800 adiós');
+        ok('escribir con medio par suplente no cuelga', !!escrito);
+        eq('se escribe UTF-8 saneado', new TextDecoder('utf-8').decode(escrito), 'hola \uFFFD adiós');
+    } finally {
+        if (antesNL === undefined) delete globalThis.Neutralino; else globalThis.Neutralino = antesNL;
+        if (antesOS === undefined) delete globalThis.NL_OS; else globalThis.NL_OS = antesOS;
+    }
+
+    // El diálogo de carpeta es lo único que NO puede llevar plazo: lo modal lo
+    // decide la persona, y treinta segundos eligiendo carpeta son normales.
+    const fuenteAdaptador = (await import('node:fs')).default.readFileSync(
+        (await import('node:url')).fileURLToPath(new URL('../platform/neutralino.js', import.meta.url)), 'utf8');
+    ok('showFolderDialog se queda sin plazo a propósito',
+        /showFolderDialog/.test(fuenteAdaptador) && !/conPlazo\(NL\(\)\.os\.showFolderDialog/.test(fuenteAdaptador));
+    ok('pero las lecturas y escrituras sí lo llevan',
+        /conPlazo\(\s*NL\(\)\.filesystem\.readBinaryFile/.test(fuenteAdaptador)
+        && /conPlazo\(\s*NL\(\)\.filesystem\.writeBinaryFile/.test(fuenteAdaptador));
+}
+
 // ── report ────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(50)}`);
 if (failed) {

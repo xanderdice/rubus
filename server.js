@@ -1,5 +1,5 @@
 /**
- * Rubus server — `npm start`.
+ * Rubus server — `npm run serve`.
  *
  * Serves the app AND gives it hands. In the Neutralino desktop shell the page
  * talks to the filesystem through the native API; in a browser it cannot, so

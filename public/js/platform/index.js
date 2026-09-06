@@ -41,7 +41,7 @@ function createBrowserPlatform() {
     const nope = (what) => async () => {
         const e = new Error(
             `${what} no está disponible: no hay backend. Arranca el servidor con ` +
-            '"npm start" y abre http://127.0.0.1:4322, o usa la app de escritorio con "npm run dev".'
+            '"npm run serve" y abre http://127.0.0.1:4322, o usa la app de escritorio con "npm start".'
         );
         e.code = 'NO_NATIVE';
         throw e;
@@ -63,14 +63,14 @@ function createBrowserPlatform() {
         execEnabled: false,
         exec: async (command) => ({
             stdout: '',
-            stderr: `No se puede ejecutar "${command}": no hay backend. Arranca "npm start".`,
+            stderr: `No se puede ejecutar "${command}": no hay backend. Arranca "npm run serve".`,
             exitCode: -1,
             timedOut: false,
             aborted: false,
             durationMs: 0
         }),
         killAll: async () => {},
-        webFetch: async () => ({ ok: false, error: 'no hay backend para salir a internet. Arranca "npm start".' }),
+        webFetch: async () => ({ ok: false, error: 'no hay backend para salir a internet. Arranca "npm run serve".' }),
         storage: {
             async get(key) {
                 try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; }
@@ -99,6 +99,31 @@ function createBrowserPlatform() {
  *   4. degraded    — a browser with nothing behind it. Reads nothing, runs
  *                    nothing, and says so instead of failing silently.
  */
+/**
+ * ¿Estamos dentro del shell de escritorio, o en un navegador cualquiera?
+ *
+ * La pregunta no es trivial porque `window.Neutralino` existe en los dos: el
+ * cliente vive en `public/vendor/neutralino.js` y `server.js` también lo sirve.
+ * Hace falta algo que sólo ponga el shell, y eso son los globales `NL_*` de
+ * `__neutralino_globals.js` — bajo `server.js` ese archivo es un stub vacío.
+ *
+ * Mirar sólo `NL_TOKEN` era el fallo. Con `tokenSecurity: "one-time"` el token
+ * global existe UNA vez: el cliente lo copia a sessionStorage y a partir de la
+ * primera recarga sólo está ahí — su propio código hace
+ * `window.NL_TOKEN || sessionStorage.getItem("NL_TOKEN")`. Así que al recargar
+ * la ventana, la app de escritorio se daba por no-Neutralino, caía al sondeo
+ * HTTP, pedía `/api/ping` contra sus propios recursos (queda en
+ * `neutralinojs.log` como `NE_RS_UNBLDRE ... /public/api/ping/index.html`) y
+ * terminaba en la plataforma degradada: una ventana abierta, sin manos, sin un
+ * solo error a la vista.
+ */
+export function enElShell() {
+    if (globalThis.NL_TOKEN || globalThis.NL_PORT || globalThis.NL_APPID) return true;
+    // El token guardado por el cliente en la primera carga. Puede lanzar si el
+    // almacenamiento está bloqueado, y eso no puede tumbar el arranque.
+    try { return !!sessionStorage.getItem('NL_TOKEN'); } catch { return false; }
+}
+
 export async function detectPlatform() {
     const isNode = typeof process !== 'undefined'
         && process.versions
@@ -110,7 +135,7 @@ export async function detectPlatform() {
         return createNodePlatform();
     }
 
-    if (globalThis.Neutralino && globalThis.NL_TOKEN) {
+    if (globalThis.Neutralino && enElShell()) {
         const { createNeutralinoPlatform } = await import('./neutralino.js');
         return createNeutralinoPlatform();
     }

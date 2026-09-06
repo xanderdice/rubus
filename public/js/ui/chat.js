@@ -7,7 +7,7 @@
  * and only runs the Markdown pass once, when the turn ends.
  */
 
-import { $, el, icon, isAtBottom, shortTime } from './dom.js';
+import { $, el, icon, isAtBottom, must, shortTime } from './dom.js';
 import { renderMarkdown } from './markdown.js';
 import { StreamWriter } from './stream-writer.js';
 import { VirtualScroller } from './virtual-scroller.js';
@@ -35,7 +35,9 @@ const TRIM_BLOCK = 5000;
 
 export class ChatView {
     constructor() {
-        this.scroll = $('#chat-scroll');
+        // Obligatorio: es el viewport que gobierna el scroller. Sin él el fallo
+        // salía tres marcos más abajo, dentro de VirtualScroller.
+        this.scroll = must('#chat-scroll');
         this.list = $('#chat-messages');
         this.welcome = $('#chat-welcome');
         this.streams = new Map();   // id -> {body, think, out: StreamWriter, reason: StreamWriter}

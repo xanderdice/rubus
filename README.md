@@ -5,10 +5,12 @@ modelo servido por [Ollama](https://ollama.com). Sin nube, sin claves de API y
 sin dependencias en tiempo de ejecución.
 
 ```bash
-npm start
+npm install && npm start
 ```
 
-Abre <http://127.0.0.1:4322>. Necesitas Node 18+ y `ollama serve` en marcha con
+Compila la app de escritorio y la abre. Si prefieres usarla en el navegador,
+`npm run serve` levanta el servidor en <http://127.0.0.1:4322> y no necesita
+instalar nada. Necesitas Node 18+ y `ollama serve` en marcha con
 algún modelo descargado (`ollama pull qwen3.6`). Si Ollama no está, la app
 arranca igual: sirve para navegar el proyecto y avisa de lo que falta.
 
@@ -78,23 +80,25 @@ acierta al segundo intento lo que no acertaba nunca.
 
 | | |
 |---|---|
-| `npm start` | lint con auto-fix, servidor y navegador en http://127.0.0.1:4322 |
-| `npm run serve` | lo mismo sin lint, para arrancar y punto |
+| `npm start` | compila la app de escritorio y la abre |
+| `npm run build` | sólo compila, en `dist/` |
+| `npm run dev` | app de escritorio sin compilar, para iterar |
+| `npm run serve` | servidor web en http://127.0.0.1:4322, sin instalar nada |
 | `npm run selftest` | pruebas del arnés, sin dependencias ni framework |
 | `npm run lint` / `npm run lint:fix` | comprobar / corregir |
 | `npm run setup:design` | trae PlayCanvas para el estudio de diseño |
-| `npm run dev` | app de escritorio (antes: `npm run setup`) |
-| `npm run build` | release; el lint bloquea si queda algún error |
 | `npm run headless -- --root <dir> --task "..."` | el mismo motor sin interfaz |
 
-`npm start` pasa ESLint con `--fix` antes de levantar el servidor, y lo que no
-puede corregir lo avisa **sin** bloquear el arranque: tienes que poder levantar
-la app justo para depurar aquello de lo que el lint se queja. En `npm run build`
-sí bloquea, porque una release no debería llevar código que no pasa el lint.
+`npm start` y `npm run dev` pasan ESLint con `--fix` antes de arrancar, y lo
+que no puede corregir lo avisan **sin** bloquear: tienes que poder abrir la app
+justo para depurar aquello de lo que el lint se queja. En `npm run build` sí
+bloquea, porque una release no debería llevar código que no pasa el lint.
 
-Si clonas y ejecutas `npm start` sin instalar nada, el lint se omite con un
-aviso y el servidor arranca igual. ESLint es una comodidad del que desarrolla,
-no un requisito para ejecutar el programa.
+La primera vez, `npm start` baja solo el framework de Neutralino (~15 MB) a
+`bin/` y `public/vendor/`; las dos carpetas están en `.gitignore`.
+
+`npm run serve` no necesita `npm install`: el servidor son módulos nativos de
+Node y el lint se omite con un aviso si ESLint no está.
 
 Además del estilo, la configuración hace cumplir la regla de arquitectura del
 proyecto: `public/js/core/**` no puede importar Node ni tocar el DOM. Es lo que

@@ -1,14 +1,14 @@
 /**
- * ESLint, enganchado a `npm start` y a `npm run build`.
+ * ESLint, enganchado a `npm start`, `npm run dev` y `npm run build`.
  *
  * Por qué un envoltorio y no `eslint --fix` a secas en el script de npm:
  *
- *  · **`npm start` tiene que funcionar en un clon recién hecho.** Es una
- *    promesa explícita del proyecto (ver AGENTS.md) y el motivo de que no haya
- *    dependencias en tiempo de ejecución. Si `prestart` fuese `eslint --fix`,
- *    clonar y arrancar fallaría con "eslint: not found" antes de servir nada.
- *    Aquí, si ESLint no está instalado se dice y se sigue. El lint es una
- *    comodidad del que desarrolla, no un requisito para ejecutar el programa.
+ *  · **El lint nunca puede impedir que el programa arranque.** `npm run serve`
+ *    funciona en un clon recién hecho sin `npm install` — es una promesa
+ *    explícita del proyecto — y `npm start` / `npm run build` compilan la app
+ *    de escritorio, que sí necesita el CLI de Neutralino. En los tres casos, si
+ *    ESLint no está se dice y se sigue: es una comodidad del que desarrolla, no
+ *    un requisito para ejecutar nada.
  *
  *  · **`npx eslint` no sirve para esto.** Si el paquete falta, npx se lo baja
  *    de la red — en mitad de un arranque, sin avisar, y fallando en una máquina

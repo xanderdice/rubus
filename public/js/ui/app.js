@@ -227,7 +227,7 @@ class App {
             warn.hidden = false;
             warn.textContent =
                 'Sin backend: no hay acceso a archivos ni a la terminal. Arranca el servidor con ' +
-                '"npm start" y abre http://127.0.0.1:4322, o usa la app de escritorio con "npm run dev".';
+                '"npm run serve" y abre http://127.0.0.1:4322, o usa la app de escritorio con "npm start".';
             return;
         }
 

@@ -10,7 +10,7 @@
  * per-directory tree would be more elegant and much less responsive to type in.
  */
 
-import { el, icon, clear, $, toast } from './dom.js';
+import { el, icon, clear, $, must, toast } from './dom.js';
 import { walkFiles } from '../core/walk.js';
 import { VirtualScroller } from './virtual-scroller.js';
 import * as P from '../platform/paths.js';
@@ -19,7 +19,8 @@ export class Explorer {
     constructor({ platform, engine }) {
         this.platform = platform;
         this.engine = engine;
-        this.body = $('#explorer-body');
+        // Obligatorio: clear(this.body) lo desreferencia enseguida.
+        this.body = must('#explorer-body');
         this.count = $('#explorer-count');
         this.filterInput = $('#explorer-filter');
         this.pinsSection = $('#pins-section');

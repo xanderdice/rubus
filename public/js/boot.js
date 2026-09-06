@@ -32,6 +32,15 @@
         box.appendChild(p);
         wrap.appendChild(box);
         document.body.appendChild(wrap);
+
+        // En la app empaquetada no hay consola a la vista, así que la única
+        // copia de un fallo de arranque está en una ventana que el usuario va a
+        // cerrar. Se duplica al log nativo, que ya existe y ya se escribe a
+        // disco (`neutralinojs.log`, junto al ejecutable).
+        try {
+            var anotado = window.Neutralino.debug.log(title + '\n\n' + detail, 'ERROR');
+            if (anotado && anotado.catch) anotado.catch(function () { /* el log no puede romper el arranque */ });
+        } catch { /* no estamos en el shell */ }
     }
 
     // Neutralino's client library is injected by the shell as a global. When it
@@ -49,6 +58,110 @@
             console.error('Neutralino.init falló', err);
             return false;
         }
+    }
+
+    var nucleoCaido = false;
+
+    /**
+     * Desarma el borrado de página del cliente de Neutralino.
+     *
+     * `Neutralino.init()` deja armados dos manejadores que, ante un fallo del
+     * socket contra el núcleo, hacen `document.body.innerText = ''` y acto
+     * seguido `document.write(...)`: NE_CL_IVCTOKN si no consigue conectar, y
+     * NE_RT_INVTOKN si el núcleo rechaza el token en cualquier llamada nativa
+     * posterior. Con el documento ya analizado ese `write` implica un
+     * `document.open()`, así que no añade nada: destruye la página entera.
+     *
+     * El archivo del cliente no se puede parchear — está en `.gitignore` y
+     * `neu update` lo reescribe — así que se intercepta aquí el `write`, que
+     * es su último paso, y se cambia un código de error desnudo por una
+     * explicación. La página ya está perdida cuando llegamos, porque el
+     * `innerText = ''` ocurrió una línea antes; lo que se gana es decir qué ha
+     * pasado. Y sirve también DESPUÉS del arranque, que es cuando
+     * NE_RT_INVTOKN se lleva por delante una sesión de trabajo entera.
+     */
+    function protegerDocumento() {
+        if (!window.Neutralino) return;
+
+        document.write = function (texto) {
+            nucleoCaido = true;
+            var codigo = /NE_[A-Z_]+/.exec(String(texto || ''));
+            fatal('Se ha perdido la conexión con el núcleo de Neutralino', [
+                'El cliente no ha podido hablar con el proceso nativo que da',
+                'acceso a los archivos y a la terminal' + (codigo ? ' (' + codigo[0] + ')' : '') + ',',
+                'y ha borrado la página al fallar.',
+                '',
+                'Cierra la ventana y vuelve a abrirla con "npm start". Recargar',
+                'no sirve: el token se entrega una sola vez.',
+                '',
+                'El detalle está en dist/rubus/neutralinojs.log.'
+            ].join('\n'));
+        };
+        document.writeln = document.write;
+    }
+
+    /**
+     * Espera a que el shell haya conectado con su núcleo antes de montar nada.
+     *
+     * El cliente de Neutralino, cuando el WebSocket contra el núcleo da error,
+     * hace `document.body.innerText = ''` y acto seguido `document.write(...)`
+     * — es decir, BORRA el documento — y lo hace de forma asíncrona, cuando
+     * index.html ya está parseado y este archivo ya ha lanzado su import().
+     * El montaje se encontraba entonces un documento vacío y reventaba en el
+     * primer elemento que buscase, con un «Cannot read properties of null»
+     * que señalaba a VirtualScroller en lugar de a la causa. Costó una tarde.
+     *
+     * En el navegador no pasa porque `Neutralino.init()` lanza antes de llegar
+     * ahí (no hay NL_PORT, la URL del WebSocket es inválida), así que ese
+     * manejador destructivo no se llega a instalar.
+     *
+     * Se espera al evento `ready`, que el cliente dispara al abrirse el
+     * WebSocket. Si no llega y además el documento ha desaparecido bajo
+     * nuestros pies, se dice lo que de verdad ha ocurrido.
+     */
+    var ESPERA_NUCLEO = 6000;
+
+    function nucleoListo(enElShell) {
+        if (!enElShell) return Promise.resolve(true);
+
+        return new Promise(function (resolve) {
+            var resuelto = false;
+            function decidir(conectado) {
+                if (resuelto) return;
+                resuelto = true;
+                resolve(conectado);
+            }
+
+            try {
+                window.Neutralino.events.on('ready', function () { decidir(true); });
+            } catch {
+                decidir(true);   // sin eventos no hay nada que esperar; que monte.
+                return;
+            }
+            setTimeout(function () { decidir(false); }, ESPERA_NUCLEO);
+        }).then(function (conectado) {
+            // Si el interceptor ya explicó lo ocurrido, no lo pisamos.
+            if (nucleoCaido) return false;
+
+            // El documento vacío es la firma del borrado: `innerText = ''` deja
+            // el body sin un solo hijo. Si sigue entero, lo único que ha pasado
+            // es que no vimos el evento; que monte y falle solo si acaso.
+            var vaciado = !document.body || document.body.children.length === 0;
+            if (conectado || !vaciado) return true;
+
+            fatal('No se pudo conectar con el núcleo de Neutralino', [
+                'La ventana ha abierto, pero el cliente no ha conseguido hablar con',
+                'el proceso nativo que le da acceso a los archivos y a la terminal,',
+                'y ha borrado la página al fallar (NE_CL_IVCTOKN).',
+                '',
+                'Suele ser un token ya consumido: cierra la ventana y vuelve a',
+                'abrirla con "npm start". Recargar la página no sirve, porque el',
+                'token se entrega una sola vez.',
+                '',
+                'Si se repite, el detalle está en dist/rubus/neutralinojs.log.'
+            ].join('\n'));
+            return false;
+        });
     }
 
     /**
@@ -112,10 +225,14 @@
         return;
     }
 
-    initNeutralino();
+    // La red de seguridad, puesta antes de que el cliente pueda fallar.
+    protegerDocumento();
 
-    import('./ui/app.js')
-        .then(function (mod) { return mod.mountApp(); })
+    nucleoListo(initNeutralino())
+        .then(function (seguir) {
+            if (!seguir) return undefined;   // ya se ha explicado en pantalla
+            return import('./ui/app.js').then(function (mod) { return mod.mountApp(); });
+        })
         .catch(function (err) {
             // A SyntaxError here means the browser could not PARSE the modules,
             // which is the "too old" case the feature check cannot see without
@@ -140,8 +257,8 @@
                 (err && err.stack) || '',
                 '',
                 'Comprueba que la carpeta public/js está completa y que la página',
-                'se sirve con "npm start" (http://127.0.0.1:4322) o desde el shell',
-                'de escritorio con "npm run dev".'
+                'se sirve con "npm run serve" (http://127.0.0.1:4322) o desde el shell',
+                'de escritorio con "npm start".'
             ].join('\n'));
         });
 })();

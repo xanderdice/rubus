@@ -4,6 +4,33 @@ export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 /**
+ * Como `$`, pero para los elementos que `index.html` tiene que traer sí o sí.
+ *
+ * Un `querySelector` que devuelve null no falla donde está el problema: se
+ * guarda, se pasa a otro sitio y revienta más tarde con algo como «Cannot read
+ * properties of null (reading 'ownerDocument')», que no dice qué elemento
+ * falta. En la app de escritorio eso es todo lo que se ve — no hay barra de
+ * direcciones ni consola a mano.
+ *
+ * El estado del documento va en el mensaje porque es lo que separa las dos
+ * causas posibles, que se arreglan de forma distinta: si `readyState` es
+ * `loading` o el body está casi vacío, el código arrancó antes de tiempo; si el
+ * documento está entero, es el marcado el que ha perdido el elemento.
+ */
+export function must(sel, root = document) {
+    const node = root.querySelector(sel);
+    if (node) return node;
+
+    const body = document.body;
+    throw new Error(
+        `Falta el elemento ${sel} en index.html. ` +
+        `readyState=${document.readyState}, ` +
+        `body=${body ? `${body.children.length} hijos` : 'sin body'}, ` +
+        `url=${location.href}`
+    );
+}
+
+/**
  * Build an element. `props` sets properties (not attributes) except for a few
  * special keys, so `el('div', {className, dataset, onclick})` works as expected.
  */

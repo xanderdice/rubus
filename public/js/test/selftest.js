@@ -939,7 +939,25 @@ section('contexto pequeño / proyecto grande');
     ok('con el tope de 8 se prioriza el par de internet entero',
         ['search_web', 'fetch_url'].every(n => reg.forPhase('act', { maxTools: 8 }).some(t => t.name === n)),
         reg.forPhase('act', { maxTools: 8 }).map(t => t.name).join(','));
-    ok('outline_file está expuesta en explore', reg.forPhase('explore', { maxTools: 8 }).some(t => t.name === 'outline_file'));
+    // En explore, `outline_file` cedió su hueco a la terminal por el mismo
+    // razonamiento: con el tope de 8 alguien tiene que salir, y un `read_file`
+    // comprimido se suple leyendo el archivo, mientras que preguntarle al
+    // proyecto por su estado (`git log`, `git status`, `npm ls`) no lo suple
+    // nada. Sigue estando si el perfil da para más herramientas.
+    ok('outline_file sigue en explore con un tope holgado',
+        reg.forPhase('explore', { maxTools: 20 }).some(t => t.name === 'outline_file'));
+
+    // Explorar sin terminal dejaba al modelo adivinando cosas que el proyecto
+    // sabe responder. Ahora la tiene, y limitada a solo lectura por la propia
+    // herramienta (ver la sección «terminal de solo lectura»).
+    for (const fase of ['explore', 'plan']) {
+        const names = reg.forPhase(fase, { maxTools: 8 }).map(t => t.name);
+        ok(`hay terminal en ${fase} con el tope por defecto`, names.includes('run_terminal_command'), names.join(','));
+    }
+    ok('finish_step sigue sobreviviendo en explore',
+        reg.forPhase('explore', { maxTools: 4 }).map(t => t.name).includes('finish_step'));
+    ok('y allowShell:false la sigue quitando en explore',
+        !reg.forPhase('explore', { maxTools: 8, allowShell: false }).map(t => t.name).includes('run_terminal_command'));
 }
 
 // ── embeddable component ──────────────────────────────────────────────────
@@ -2296,7 +2314,11 @@ section('aprobación/comandos');
     const { runTerminalCommand } = await import('../core/tools/shell-tools.js');
     const { Security } = await import('../core/security.js');
 
-    const correr = async (command, modo, over = {}) => {
+    // La fase forma parte del contexto real: el motor siempre la pasa, y es de
+    // lo que ya depende la política que impide escribir fuera de `act`. El
+    // arnés la omitía, que es lo mismo que probar contra un contexto que no
+    // existe.
+    const correr = async (command, modo, over = {}, fase = 'act') => {
         const cfg = {
             get: (k, fb) => ({
                 'agent.approvalMode': modo,
@@ -2308,8 +2330,9 @@ section('aprobación/comandos');
         const pedidas = [];
         const ejecutados = [];
         const avisos = [];
-        await runTerminalCommand.run({ command }, {
+        const salida = await runTerminalCommand.run({ command }, {
             config: cfg,
+            phase: fase,
             security: new Security(cfg),
             root: 'C:/R',
             signal: null,
@@ -2323,7 +2346,7 @@ section('aprobación/comandos');
                 }
             }
         });
-        return { pregunto: pedidas.length > 0, riesgo: pedidas[0]?.risk, ejecutados, avisos };
+        return { pregunto: pedidas.length > 0, riesgo: pedidas[0]?.risk, ejecutados, avisos, salida };
     };
 
     const seguroAuto = await correr('git status', 'auto');
@@ -2348,6 +2371,30 @@ section('aprobación/comandos');
     eq('y se marca como peligroso', rmManual.riesgo, 'dangerous');
 
     eq('git push en auto no pregunta', (await correr('git push origin main', 'auto')).pregunto, false);
+
+    // ── terminal de solo lectura fuera de `act` ───────────────────────────
+    // Explorar sin terminal dejaba al modelo adivinando lo que `git log`
+    // responde en un segundo. Ahora la tiene, pero sólo para mirar: cambiar
+    // algo antes de que el plan esté aprobado es justo lo que el arnés impide,
+    // y que este comando no pase por el diff no lo hace menos cierto.
+    for (const fase of ['explore', 'plan']) {
+        const mirar = await correr('git status', 'auto', {}, fase);
+        eq(`${fase}: un comando de solo lectura se ejecuta`, mirar.ejecutados.length, 1);
+
+        const tocar = await correr('npm install', 'auto', {}, fase);
+        eq(`${fase}: uno que cambia cosas no se ejecuta`, tocar.ejecutados.length, 0);
+        ok(`${fase}: y se responde que no, sin excepción`, !!tocar.salida && tocar.salida.ok === false,
+            JSON.stringify(tocar.salida));
+        ok(`${fase}: el mensaje manda ponerlo en el plan`, /plan/i.test((tocar.salida || {}).detail || ''),
+            (tocar.salida || {}).detail);
+
+        eq(`${fase}: un destructivo tampoco, ni en modo auto`,
+            (await correr('rm -rf build', 'auto', {}, fase)).ejecutados.length, 0);
+    }
+
+    // En `act` no cambia nada: manda la política de aprobación de siempre.
+    eq('en act lo que cambia cosas sí se ejecuta',
+        (await correr('npm install', 'auto', {}, 'act')).ejecutados.length, 1);
 
     // Sin diálogo, pero con rastro: es la única forma de responder después a
     // "¿qué ejecutó exactamente?".
@@ -3415,6 +3462,132 @@ section('escritorio/el núcleo que no contesta');
     ok('pero las lecturas y escrituras sí lo llevan',
         /conPlazo\(\s*NL\(\)\.filesystem\.readBinaryFile/.test(fuenteAdaptador)
         && /conPlazo\(\s*NL\(\)\.filesystem\.writeBinaryFile/.test(fuenteAdaptador));
+}
+
+// ── la salida de los comandos no puede pasar por el núcleo ────────────────
+// Esto no era un cuelgue, era una MUERTE: el núcleo mete cada trozo de stdout
+// en un JSON, y con bytes que no son UTF-8 válido revienta y se lleva por
+// delante el proceso de la aplicación. Medido contando procesos antes y
+// después: `dir` sobre una carpeta con una tilde en el nombre deja cero. Es
+// el «a veces se cierra sola». Por eso la salida va a archivos y se lee de
+// ahí, que es la única vía por la que esos bytes no tocan el núcleo.
+section('escritorio/la salida de los comandos');
+{
+    const { createNeutralinoPlatform } = await import('../platform/neutralino.js');
+
+    const antesNL = globalThis.Neutralino;
+    const antesOS = globalThis.NL_OS;
+    globalThis.NL_OS = 'Windows';
+
+    // Un núcleo de mentira con archivos en memoria.
+    const archivos = new Map();
+    let comandoLanzado = null;
+    let alSalir = null;
+    const borrados = [];
+
+    globalThis.Neutralino = {
+        events: { on(nombre, fn) { if (nombre === 'spawnedProcess') alSalir = fn; } },
+        os: {
+            getEnv: async () => 'C:/tmp',
+            spawnProcess: async (cmd) => { comandoLanzado = cmd; return { id: 7 }; },
+            updateSpawnedProcess: async () => {}
+        },
+        filesystem: {
+            getStats: async (p) => {
+                const b = archivos.get(p);
+                if (!b) { const e = new Error('no existe'); e.code = 'NE_FS_NOPATHE'; throw e; }
+                return { size: b.length, isFile: true, isDirectory: false, modifiedAt: 0 };
+            },
+            readBinaryFile: async (p, opts) => {
+                const b = archivos.get(p);
+                if (!b) { const e = new Error('no existe'); e.code = 'NE_FS_NOPATHE'; throw e; }
+                const desde = opts ? opts.pos : 0;
+                const cuanto = opts ? opts.size : b.length - desde;
+                return b.slice(desde, desde + cuanto).buffer;
+            },
+            remove: async (p) => { borrados.push(p); archivos.delete(p); },
+            createDirectory: async () => {}
+        }
+    };
+
+    try {
+        const plataforma = createNeutralinoPlatform();
+        const trozos = [];
+        const corriendo = plataforma.exec('dir C:/proyecto', {
+            onOutput: (canal, texto) => trozos.push([canal, texto])
+        });
+
+        // Esperar a que componga el comando y empiece a sondear.
+        await new Promise(r => setTimeout(r, 60));
+        ok('el comando va agrupado y redirigido a dos archivos',
+            /^\( dir C:\/proyecto \) 1>"[^"]+\.out" 2>"[^"]+\.err"$/.test(String(comandoLanzado)),
+            String(comandoLanzado));
+
+        const salida = /1>"([^"]+)"/.exec(comandoLanzado)[1];
+
+        // Primera mitad, cortando un carácter multibyte por el medio: la «ó» de
+        // «versión» en UTF-8 son dos bytes y aquí sólo llega el primero. Si el
+        // descodificador no fuese en modo flujo, saldría un U+FFFD falso.
+        const completo = new TextEncoder().encode('// versión\n');
+        archivos.set(salida, completo.slice(0, 9));
+        await new Promise(r => setTimeout(r, 220));
+
+        // Segunda mitad, más un byte que NO es UTF-8 válido: el 0xF3 suelto que
+        // escupe una consola española y que mataba la aplicación.
+        const resto = new Uint8Array([...completo.slice(9), 0xF3, 0x0a]);
+        const todo = new Uint8Array(9 + resto.length);
+        todo.set(completo.slice(0, 9)); todo.set(resto, 9);
+        archivos.set(salida, todo);
+        await new Promise(r => setTimeout(r, 220));
+
+        alSalir({ detail: { id: 7, action: 'exit', data: 0 } });
+        const r = await corriendo;
+
+        eq('el comando termina con su código', r.exitCode, 0);
+        eq('la salida llega entera y bien descodificada', r.stdout, '// versión\n\uFFFD\n');
+        ok('y llegó a trozos, no de golpe al final', trozos.length >= 2, JSON.stringify(trozos));
+        ok('el carácter partido entre dos lecturas no se rompe',
+            !trozos[0][1].includes('\uFFFD'), JSON.stringify(trozos[0]));
+        ok('los archivos temporales se borran', borrados.length === 2, JSON.stringify(borrados));
+    } finally {
+        if (antesNL === undefined) delete globalThis.Neutralino; else globalThis.Neutralino = antesNL;
+        if (antesOS === undefined) delete globalThis.NL_OS; else globalThis.NL_OS = antesOS;
+    }
+}
+
+// ── callar la aplicación ──────────────────────────────────────────────────
+// El silencio se pide cuando ya te están hablando. Tenerlo sólo dentro de
+// Ajustes obliga a abrir, buscar y cerrar mientras la voz sigue sonando.
+section('interfaz/silencio');
+{
+    const nodefs3 = (await import('node:fs')).default;
+    const np3 = (await import('node:path')).default;
+    const { fileURLToPath: u2p3 } = await import('node:url');
+    const raiz3 = np3.resolve(np3.dirname(u2p3(import.meta.url)), '..', '..', '..');
+    const leer3 = (...p) => nodefs3.readFileSync(np3.join(raiz3, ...p), 'utf8');
+
+    const html = leer3('public', 'index.html');
+    ok('hay un botón de silencio en la barra', /id="btn-mute"/.test(html));
+    ok('y los dos iconos que necesita', /id="i-sound"/.test(html) && /id="i-muted"/.test(html));
+    ok('empieza declarando si está pulsado', /id="btn-mute"[^>]*aria-pressed/.test(html));
+
+    const app = leer3('public', 'js', 'ui', 'app.js');
+    // Callar tiene que apagar las DOS cosas: un botón que quita los pitidos y
+    // deja la voz hablando no es lo que nadie quiere decir con «cállate».
+    ok('el botón apaga sonido y voz a la vez',
+        /cfg\.set\('ui\.sound', encender\)/.test(app) && /cfg\.set\('ui\.speech', encender\)/.test(app));
+    ok('se aplica antes de guardar, para cortar en seco',
+        app.indexOf('this.applyPreferences();            // corta en seco') <
+        app.indexOf('await cfg.save()'));
+    ok('y se guarda, que era justo lo que no se quedaba puesto', /await cfg\.save\(\)/.test(app));
+    ok('si no se puede guardar, se dice', /no se pudo guardar/.test(app));
+    ok('el estado del botón se refresca con las preferencias',
+        /refrescarSilencio\(\)/.test(app) && app.split('refrescarSilencio').length >= 3);
+
+    // `setEnabled(false)` tiene que cortar lo que ya está sonando, no sólo
+    // impedir lo siguiente.
+    ok('apagar la voz calla lo que ya estaba diciendo',
+        /setEnabled\(on\)\s*\{[^}]*if \(!this\.enabled\) this\.stop\(\)/s.test(leer3('public', 'js', 'ui', 'speech.js')));
 }
 
 // ── report ────────────────────────────────────────────────────────────────

@@ -41,6 +41,25 @@ export const runTerminalCommand = {
             };
         }
 
+        // Fuera de `act` la terminal existe, pero sólo para mirar.
+        //
+        // Explorar sin poder preguntar `git log` o `npm ls` deja al modelo
+        // adivinando cosas que el proyecto sabe responder, y ése era el hueco.
+        // Lo que no puede hacer es cambiar nada antes de que haya un plan
+        // aprobado: esa es la garantía sobre la que se apoya el arnés entero, y
+        // no la afloja el hecho de que este comando no pase por el diff.
+        if (ctx.phase !== 'act' && verdict.risk !== RISK.SAFE) {
+            return {
+                ok: false,
+                summary: `Aquí la terminal es de solo lectura: ${command}`,
+                detail: 'En esta fase sirve para inspeccionar, no para cambiar cosas: '
+                    + 'git status, git log, git diff, git show, ls, cat, head, npm ls, '
+                    + 'node --version, node --check, tsc --noEmit y parecidos.\n'
+                    + 'Si el trabajo necesita ejecutar esto de verdad, ponlo como paso del '
+                    + 'plan y se ejecutará al actuar.'
+            };
+        }
+
         const policy = approvalPolicy(ctx.config);
         const mustAsk = verdict.risk === RISK.DANGEROUS
             ? !policy.dangerousCommands

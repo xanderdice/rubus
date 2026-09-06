@@ -55,8 +55,19 @@ const PHASE_TOOLS = {
     // Las de internet van detrás de las del proyecto a propósito: la respuesta
     // suele estar en el código que tienes delante, y un modelo con `search_web`
     // en la primera posición se va a buscar a Google antes de abrir el archivo.
-    explore: ['read_file', 'search_codebase', 'outline_file', 'list_directory', 'get_project_structure', 'search_web', 'fetch_url', 'finish_step', 'think'],
-    plan: ['read_file', 'search_codebase', 'outline_file', 'list_directory', 'get_project_structure', 'search_web', 'fetch_url', 'think'],
+    // La terminal también está al explorar y al planificar, no sólo al actuar.
+    // Sin ella el modelo adivina cosas que el proyecto sabe responder solo:
+    // `git log` para ver qué se tocó last, `git status` para saber si hay
+    // trabajo a medias, `npm ls` para las versiones reales. En esas fases
+    // `run_terminal_command` se limita a los comandos de solo lectura — lo
+    // impone la propia herramienta —, así que la garantía de que nada cambia
+    // antes de aprobar el plan sigue en pie.
+    //
+    // Entra en el hueco de `outline_file`, que baja al final: con el tope de 8
+    // alguien tenía que salir, y `outline_file` es un `read_file` comprimido,
+    // mientras que preguntarle al proyecto por su estado no lo suple nada.
+    explore: ['read_file', 'search_codebase', 'list_directory', 'run_terminal_command', 'get_project_structure', 'search_web', 'fetch_url', 'finish_step', 'outline_file', 'think'],
+    plan: ['read_file', 'search_codebase', 'list_directory', 'run_terminal_command', 'get_project_structure', 'search_web', 'fetch_url', 'outline_file', 'think'],
     // `outline_file` baja por detrás del par de internet, y no es un capricho:
     // con maxTools=8 el corte caía justo entre search_web y fetch_url, y buscar
     // sin poder abrir el resultado es media herramienta. outline_file, en

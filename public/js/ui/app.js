@@ -504,6 +504,12 @@ class App {
         click('#chip-model', 'exec', () => this.modelPicker.open());
         click('#btn-settings', 'exec', () => { this.settings.render(); openDialog('settings-dialog'); });
 
+        // El silencio se pide cuando ya te están hablando, no cuando planeas
+        // configurarlo: por eso está en la barra y no dentro de Ajustes, que
+        // hay que abrir, buscar y cerrar mientras la voz sigue. Apaga las dos
+        // cosas a la vez porque es lo que se quiere decir con «cállate».
+        $('#btn-mute').addEventListener('click', () => this.toggleSilencio());
+
         for (const btn of $$('#mode-switch .mode')) {
             btn.addEventListener('click', () => this.setMode(btn.dataset.mode));
         }
@@ -760,6 +766,40 @@ class App {
         if (stick) box.scrollTop = box.scrollHeight;
     }
 
+    /** ¿Están calladas las dos cosas? Es lo que refleja el botón de la barra. */
+    get silenciado() {
+        const cfg = this.engine.config;
+        return !cfg.get('ui.sound', true) && !cfg.get('ui.speech', true);
+    }
+
+    refrescarSilencio() {
+        const btn = $('#btn-mute');
+        if (!btn) return;
+        const callado = this.silenciado;
+        btn.setAttribute('aria-pressed', String(callado));
+        btn.title = callado ? 'Volver a sonar y hablar' : 'Silenciar sonido y voz';
+        btn.setAttribute('aria-label', btn.title);
+        const uso = btn.querySelector('use');
+        if (uso) uso.setAttribute('href', callado ? '#i-muted' : '#i-sound');
+    }
+
+    async toggleSilencio() {
+        const cfg = this.engine.config;
+        const encender = this.silenciado;   // si está callado, el clic lo devuelve
+        cfg.set('ui.sound', encender);
+        cfg.set('ui.speech', encender);
+        this.applyPreferences();            // corta en seco lo que esté sonando
+        if (encender) this.sound.play('exec');
+        try {
+            await cfg.save();
+        } catch (err) {
+            // Que no se pueda guardar no puede deshacer el silencio: ya está
+            // aplicado. Pero callarlo dejaría al usuario creyendo que quedó
+            // puesto para la próxima vez, y no es verdad.
+            toast(`Silencio aplicado, pero no se pudo guardar: ${err.message}`, 'warn');
+        }
+    }
+
     applyPreferences() {
         const cfg = this.engine.config;
         document.body.dataset.bloom = cfg.get('ui.bloom', 'soft');
@@ -767,6 +807,7 @@ class App {
         this.chat.showThinking = cfg.get('ui.showThinking', true);
         this.sound.setEnabled(cfg.get('ui.sound', true));
         this.sound.setVolume(cfg.get('ui.soundVolume', 0.5));
+        this.refrescarSilencio();
 
         this.speech.setEnabled(cfg.get('ui.speech', true));
         this.speech.configure({

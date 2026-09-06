@@ -222,9 +222,50 @@ export function createNeutralinoPlatform() {
     };
 
     /**
+     * Dónde dejar la salida de los comandos. Se pregunta al entorno en vez de
+     * suponer una ruta, y sólo una vez por sesión.
+     */
+    let carpetaTmp = null;
+
+    async function temporal() {
+        if (carpetaTmp) return carpetaTmp;
+        for (const nombre of isWindows ? ['TEMP', 'TMP'] : ['TMPDIR']) {
+            try {
+                const v = await conPlazo(NL().os.getEnv(nombre), `leer ${nombre}`, 5000);
+                if (v) { carpetaTmp = P.normalize(v); return carpetaTmp; }
+            } catch { /* se prueba el siguiente */ }
+        }
+        carpetaTmp = isWindows ? 'C:/Windows/Temp' : '/tmp';
+        return carpetaTmp;
+    }
+
+    let contadorExec = 0;
+
+    /**
      * Run a shell command. Resolves with whatever was produced even when the
      * command fails or times out — a non-zero exit is data the agent has to
      * read, not an exception it has to survive.
+     *
+     * La salida NO se recoge del flujo que emite el núcleo, y esa es la
+     * decisión importante de esta función.
+     *
+     * El núcleo manda cada trozo de stdout/stderr dentro de un JSON. Cuando
+     * esos bytes no son UTF-8 válido no consigue serializarlo y EL PROCESO
+     * ENTERO DE LA APLICACIÓN SE MUERE: la ventana desaparece sin aviso y se
+     * pierde la sesión. Medido contra el núcleo 5.5.0, contando el proceso
+     * antes y después: `dir` sobre una carpeta con una tilde en el nombre lo
+     * mata, y `echo versión` también. Es el caso corriente en un Windows en
+     * español, donde los comandos internos responden en cp850. No hay nada que
+     * hacer desde JavaScript, porque el núcleo muere mientras construye el
+     * mensaje, antes de que nadie pueda capturar nada; `chcp 65001` tampoco
+     * sirve, está comprobado que sigue muriendo.
+     *
+     * Así que la salida se redirige a dos archivos y se lee de ahí con
+     * `readBinaryFile`, que viaja en base64 y aguanta cualquier byte. Se lee a
+     * trozos con `pos`/`size` y se descodifica con un `TextDecoder` en modo
+     * flujo, para que un carácter partido entre dos lecturas no se rompa. Lo
+     * que no sea UTF-8 sale como U+FFFD. Y sigue llegando línea a línea al
+     * panel de terminal, que es lo que había que conservar.
      */
     async function exec(command, opts = {}) {
         const { cwd, timeoutMs = 120000, onOutput, signal } = opts;
@@ -240,7 +281,12 @@ export function createNeutralinoPlatform() {
         let settle;
         const done = new Promise(res => { settle = res; });
 
+        let termino = false;
+        let codigoSalida = -1;
+
         const job = {
+            // Ya no debería llegar nada por aquí, porque todo va redirigido. Se
+            // conserva por si un programa escribe directamente a la consola.
             push(stream, data) {
                 const text = String(data ?? '');
                 if (stream === 'stdout') stdout += text; else stderr += text;
@@ -249,13 +295,46 @@ export function createNeutralinoPlatform() {
             finish(exitCode) {
                 if (id !== null) running.delete(id);
                 clearTimeout(timer);
-                settle({ exitCode });
+                codigoSalida = exitCode;
+                termino = true;
             }
         };
 
         let timedOut = false;
         let aborted = false;
         let killed = false;
+
+        const base = `${await temporal()}/rubus-${started}-${++contadorExec}`;
+        const canales = [
+            { ruta: `${base}.out`, nombre: 'stdout', leido: 0, dec: new TextDecoder('utf-8') },
+            { ruta: `${base}.err`, nombre: 'stderr', leido: 0, dec: new TextDecoder('utf-8') }
+        ];
+
+        /** Lee lo nuevo de cada archivo y lo entrega como si fuera el flujo. */
+        async function drenar(ultimo) {
+            for (const c of canales) {
+                try {
+                    const st = await conPlazo(
+                        NL().filesystem.getStats(P.toNative(c.ruta, isWindows)), 'medir la salida', 5000);
+                    const tam = Number(st && st.size) || 0;
+                    if (tam <= c.leido) continue;
+                    const bytes = await conPlazo(
+                        NL().filesystem.readBinaryFile(P.toNative(c.ruta, isWindows),
+                            { pos: c.leido, size: tam - c.leido }),
+                        'leer la salida', 10000);
+                    c.leido = tam;
+                    const texto = c.dec.decode(bytes, { stream: !ultimo });
+                    if (texto) job.push(c.nombre, texto);
+                } catch { /* todavía no existe, o ya se borró */ }
+            }
+        }
+
+        async function limpiar() {
+            for (const c of canales) {
+                try { await conPlazo(NL().filesystem.remove(P.toNative(c.ruta, isWindows)), 'borrar la salida', 5000); }
+                catch { /* da igual, es temporal */ }
+            }
+        }
 
         /**
          * Stop the process. Callable before it has a pid, and callable twice —
@@ -272,7 +351,8 @@ export function createNeutralinoPlatform() {
                 try { await conPlazo(NL().os.updateSpawnedProcess(id, 'exit'), 'matar el proceso', 5000); } catch { /* already gone */ }
                 running.delete(id);
             }
-            settle({ exitCode: -1 });
+            codigoSalida = -1;
+            termino = true;
         };
 
         const timer = setTimeout(() => { timedOut = true; stop(); }, timeoutMs);
@@ -282,13 +362,20 @@ export function createNeutralinoPlatform() {
         const onAbort = () => { aborted = true; stop(); };
         signal?.addEventListener('abort', onAbort, { once: true });
 
+        // Los paréntesis agrupan el comando entero, así la redirección se
+        // aplica a todo y no sólo al último tramo de una cadena con `&&`.
+        const envuelto = `( ${command} ) 1>"${P.toNative(canales[0].ruta, isWindows)}" 2>"${P.toNative(canales[1].ruta, isWindows)}"`;
+
         try {
-            const proc = await conPlazo(NL().os.spawnProcess(command, cwd ? P.toNative(cwd, isWindows) : undefined), `lanzar ${command}`);
+            const proc = await conPlazo(
+                NL().os.spawnProcess(envuelto, cwd ? P.toNative(cwd, isWindows) : undefined),
+                `lanzar ${command}`);
             id = proc.id;
             running.set(id, job);
         } catch (err) {
             clearTimeout(timer);
             signal?.removeEventListener('abort', onAbort);
+            await limpiar();
             return {
                 stdout: '', stderr: String(err && err.message || err),
                 exitCode: -1, timedOut: false, aborted: false, durationMs: Date.now() - started
@@ -302,6 +389,18 @@ export function createNeutralinoPlatform() {
             aborted = aborted || !!signal?.aborted;
             stop();
         }
+
+        // El último drenaje va DESPUÉS de que el proceso termine: lo escrito
+        // entre el penúltimo sondeo y la salida sigue estando en el archivo.
+        (async () => {
+            while (!termino) {
+                await new Promise(r => setTimeout(r, 150));
+                await drenar(false);
+            }
+            await drenar(true);
+            await limpiar();
+            settle({ exitCode: codigoSalida });
+        })();
 
         const { exitCode } = await done;
         signal?.removeEventListener('abort', onAbort);
